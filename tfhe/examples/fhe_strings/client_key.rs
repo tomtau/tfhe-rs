@@ -1,0 +1,74 @@
+use std::num::NonZeroUsize;
+
+use serde::{Deserialize, Serialize};
+use tfhe::{
+    integer::{gen_keys, ClientKey as IntegerClientKey},
+    shortint::ShortintParameterSet,
+};
+
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize};
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ClientKey(IntegerClientKey);
+
+pub(crate) const NUM_BLOCKS: usize = 4;
+
+impl ClientKey {
+    pub fn new<P>(params: P) -> Self
+    where
+        P: TryInto<ShortintParameterSet>,
+        <P as TryInto<ShortintParameterSet>>::Error: std::fmt::Debug,
+    {
+        Self(gen_keys(params).0)
+    }
+
+    pub(crate) fn encrypt_byte(&self, byte: u8) -> FheAsciiChar {
+        self.0.encrypt_radix(byte as u64, NUM_BLOCKS)
+    }
+
+    pub fn decrypt_bool(&self, byte: &FheBool) -> bool {
+        self.0.decrypt_radix::<u64>(byte) != 0
+    }
+
+    pub fn decrypt_usize(&self, size: &FheUsize) -> usize {
+        self.0.decrypt_radix::<u64>(size) as usize // FIXME: 32-bit archs?
+    }
+
+    pub fn encrypt_str(
+        &self,
+        s: &str,
+    ) -> Result<FheString, Box<dyn std::error::Error + Sync + Send>> {
+        FheString::new(self, s)
+    }
+
+    pub fn encrypt_str_padded(
+        &self,
+        s: &str,
+        padding_len: NonZeroUsize,
+    ) -> Result<FheString, Box<dyn std::error::Error + Sync + Send>> {
+        FheString::new_with_padding(self, s, padding_len)
+    }
+
+    pub fn decrypt_str(&self, s: &FheString) -> String {
+        String::from_iter(s.as_ref().iter().map_while(|byte| {
+            let b: u64 = self.0.decrypt_radix(byte);
+            if b > 0 && b < 255 {
+                Some(b as u8 as char)
+            } else {
+                None
+            }
+        }))
+    }
+}
+
+impl From<IntegerClientKey> for ClientKey {
+    fn from(key: IntegerClientKey) -> Self {
+        Self(key)
+    }
+}
+
+impl AsRef<IntegerClientKey> for ClientKey {
+    fn as_ref(&self) -> &IntegerClientKey {
+        &self.0
+    }
+}

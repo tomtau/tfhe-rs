@@ -254,6 +254,10 @@ name = "dark_market"
 required-features = ["integer", "internal-keycache"]
 
 [[example]]
+name = "fhe_strings"
+required-features = ["integer", "shortint"]
+
+[[example]]
 name = "regex_engine"
 required-features = ["integer"]
 
