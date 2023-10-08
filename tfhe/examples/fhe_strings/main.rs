@@ -38,7 +38,7 @@ fn main() -> io::Result<()> {
         matches.get_one::<String>("pattern"),
     ) {
         info!("input_string: {input_string}");
-        info!("pattern: {pattern}");
+        info!("pattern  (or the second string for comparisons): {pattern}");
 
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
@@ -52,6 +52,16 @@ fn main() -> io::Result<()> {
             error!("Failed to encrypt input pattern: {e}");
             Error::new(io::ErrorKind::Other, e)
         })?;
+
+        let now = Instant::now();
+        let eq_ignore_case = server_key.eq_ignore_case(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_eq_ignore_case = client_key.decrypt_bool(&eq_ignore_case);
+        info!("`eq_ignore_case` FHE: {decrypted_eq_ignore_case} (took {elapsed:?})");
+        info!(
+            "`eq_ignore_case` std: {}",
+            input_string.eq_ignore_ascii_case(&pattern)
+        );
 
         let now = Instant::now();
         let is_empty = server_key.is_empty(&encrypted_str);
@@ -94,6 +104,41 @@ fn main() -> io::Result<()> {
         let decrypted_starts_with_encrypted = client_key.decrypt_bool(&starts_with_encrypted);
         info!("`starts_with` FHE: {decrypted_starts_with_encrypted} (took {elapsed:?}) (encrypted pattern)");
         info!("`starts_with` std: {}", input_string.starts_with(pattern));
+
+        let now = Instant::now();
+        let le = server_key.le(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_le = client_key.decrypt_bool(&le);
+        info!("`le` FHE: {decrypted_le} (took {elapsed:?})");
+        info!("`le` std: {}", input_string <= pattern);
+
+        let now = Instant::now();
+        let ge = server_key.ge(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_ge = client_key.decrypt_bool(&ge);
+        info!("`ge` FHE: {decrypted_ge} (took {elapsed:?})");
+        info!("`ge` std: {}", input_string >= pattern);
+
+        let now = Instant::now();
+        let eq = server_key.eq(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_eq = client_key.decrypt_bool(&eq);
+        info!("`eq` FHE: {decrypted_eq} (took {elapsed:?})");
+        info!("`eq` std: {}", input_string == pattern);
+
+        let now = Instant::now();
+        let ne = server_key.ne(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_ne = client_key.decrypt_bool(&ne);
+        info!("`ne` FHE: {decrypted_ne} (took {elapsed:?})");
+        info!("`ne` std: {}", input_string != pattern);
+
+        let now = Instant::now();
+        let concatted = server_key.concat(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_concatted = client_key.decrypt_str(&concatted);
+        info!("`concat` FHE: {decrypted_concatted} (took {elapsed:?})");
+        info!("`concat` std: {}", input_string.to_owned() + pattern);
 
         Ok(())
     } else {

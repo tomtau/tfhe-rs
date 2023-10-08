@@ -10,6 +10,7 @@ pub type FheUsize = RadixCiphertext;
 pub type FheAsciiChar = RadixCiphertext;
 
 /// A FHE wrapper for a string of ASCII characters.
+#[derive(Clone)]
 pub struct FheString(Vec<FheAsciiChar>);
 
 impl FheString {

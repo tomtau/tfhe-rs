@@ -1,6 +1,8 @@
 mod split;
 mod trim;
 
+use std::cmp::Ordering;
+
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tfhe::integer::ServerKey as IntegerServerKey;
@@ -38,8 +40,10 @@ impl ServerKey {
 
     #[inline]
     fn check_scalar_range(&self, encrypted_char: &FheAsciiChar, start: u8, end: u8) -> FheBool {
-        let ge_from = self.0.scalar_ge_parallelized(encrypted_char, start);
-        let le_to = self.0.scalar_le_parallelized(encrypted_char, end);
+        let (ge_from, le_to) = rayon::join(
+            || self.0.scalar_ge_parallelized(encrypted_char, start),
+            || self.0.scalar_le_parallelized(encrypted_char, end),
+        );
         self.0.bitand_parallelized(&ge_from, &le_to)
     }
 
@@ -94,17 +98,95 @@ impl ServerKey {
         todo!()
     }
 
-    /// Checks that two strings are an ASCII case-insensitive match.
+    #[inline]
+    fn par_eq_ignore_ascii_case(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> FheBool {
+        fst.par_iter()
+            .zip(snd)
+            .map(|(x, y)| {
+                // 'a' == 97, 'z' == 122
+                let (x_eq_y, ((is_lower_x, converted_x), (is_lower_y, converted_y))) = rayon::join(
+                    || self.0.eq_parallelized(x, y),
+                    || {
+                        rayon::join(
+                            || {
+                                rayon::join(
+                                    || self.check_scalar_range(x, 97, 122),
+                                    || self.0.scalar_sub_parallelized(x, 32),
+                                )
+                            },
+                            || {
+                                rayon::join(
+                                    || self.check_scalar_range(y, 97, 122),
+                                    || self.0.scalar_sub_parallelized(y, 32),
+                                )
+                            },
+                        )
+                    },
+                );
+
+                // !is_lower_x && !is_lower_y && x_eq_y
+                // || is_lower_x && is_lower_y && x_eq_y
+                // || is_lower_x && !is_lower_y && converted_x == y
+                // || !is_lower_x && is_lower_y && x == converted_y
+                // simplifies to:
+                // x_eq_y || is_lower_x && !is_lower_y && converted_x == y || !is_lower_x && is_lower_y && x == converted_y
+                let ((not_is_lower_y, not_is_lower_x), (converted_x_eq_y, x_eq_converted_y)) =
+                    rayon::join(
+                        || {
+                            rayon::join(
+                                || self.0.bitnot_parallelized(&is_lower_y),
+                                || self.0.bitnot_parallelized(&is_lower_x),
+                            )
+                        },
+                        || {
+                            rayon::join(
+                                || self.0.eq_parallelized(&converted_x, y),
+                                || self.0.eq_parallelized(x, &converted_y),
+                            )
+                        },
+                    );
+                let (is_lower_x_not_y, is_lower_y_not_x) = rayon::join(
+                    || self.0.bitand_parallelized(&is_lower_x, &not_is_lower_y),
+                    || self.0.bitand_parallelized(&is_lower_y, &not_is_lower_x),
+                );
+                let (is_lower_x_not_y_eq_converted_x, is_lower_y_not_x_eq_converted_y) =
+                    rayon::join(
+                        || {
+                            self.0
+                                .bitand_parallelized(&is_lower_x_not_y, &converted_x_eq_y)
+                        },
+                        || {
+                            self.0
+                                .bitand_parallelized(&is_lower_y_not_x, &x_eq_converted_y)
+                        },
+                    );
+                self.0.bitor_parallelized(
+                    &x_eq_y,
+                    &self.0.bitor_parallelized(
+                        &is_lower_x_not_y_eq_converted_x,
+                        &is_lower_y_not_x_eq_converted_y,
+                    ),
+                )
+            })
+            .reduce(|| self.true_ct(), |x, y| self.0.bitand_parallelized(&x, &y))
+    }
+
+    /// Checks that two encrypted strings are an ASCII case-insensitive match
+    /// and returns an encrypted `true` (`1`) if they are.
     ///
-    /// Same as `to_ascii_lowercase(a) == to_ascii_lowercase(b)`,
+    /// Same as `eq(to_lowercase(a), to_lowercase(b))`,
     /// but without allocating and copying temporaries.
     ///
     /// # Examples
     ///
     /// ```
-    /// assert!("Ferris".eq_ignore_ascii_case("FERRIS"));
-    /// assert!("Ferrös".eq_ignore_ascii_case("FERRöS"));
-    /// assert!(!"Ferrös".eq_ignore_ascii_case("FERRÖS"));
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s1 = client_key.encrypt_str("Ferris").unwrap();
+    /// let s2 = client_key.encrypt_str("FERRIS").unwrap();
+    /// assert!(client_key.decrypt_bool(&server_key.eq_ignore_case(&s1, &s2)));
     /// ```
     #[must_use]
     #[inline]
@@ -112,8 +194,20 @@ impl ServerKey {
         &self,
         encrypted_str: &FheString,
         other_encrypted_str: &FheString,
-    ) -> bool {
-        todo!("eq_ignore_case")
+    ) -> FheBool {
+        let fst = encrypted_str.as_ref();
+        let snd = other_encrypted_str.as_ref();
+        match fst.len().cmp(&snd.len()) {
+            Ordering::Less => self.0.bitand_parallelized(
+                &self.par_eq_ignore_ascii_case(fst, &snd[..fst.len()]),
+                &self.par_eq_zero(&snd[fst.len()..]),
+            ),
+            Ordering::Equal => self.par_eq_ignore_ascii_case(fst, snd),
+            Ordering::Greater => self.0.bitand_parallelized(
+                &self.par_eq_ignore_ascii_case(&fst[..snd.len()], snd),
+                &self.par_eq_zero(&fst[snd.len()..]),
+            ),
+        }
     }
 
     /// Returns the byte index of the first character of this string slice that
@@ -203,8 +297,8 @@ impl ServerKey {
     #[must_use]
     #[inline]
     pub fn len(&self, encrypted_str: &FheString) -> FheUsize {
-        encrypted_str
-            .as_ref()
+        let fst = encrypted_str.as_ref();
+        fst[..fst.len() - 1]
             .par_iter()
             .map(|x| self.0.scalar_ne_parallelized(x, 0))
             .reduce(|| self.false_ct(), |a, b| self.0.add_parallelized(&a, &b))
@@ -379,6 +473,8 @@ impl ServerKey {
             Pattern::Clear(pat) => {
                 if encrypted_str.as_ref().len() < pat.len() {
                     self.false_ct()
+                } else if pat.is_empty() {
+                    self.true_ct()
                 } else {
                     encrypted_str
                         .as_ref()
@@ -391,6 +487,8 @@ impl ServerKey {
             Pattern::Encrypted(pat) => {
                 if encrypted_str.as_ref().len() < pat.as_ref().len() {
                     self.false_ct()
+                } else if pat.as_ref().len() < 2 {
+                    self.true_ct()
                 } else {
                     encrypted_str
                         .as_ref()
@@ -438,8 +536,10 @@ impl ServerKey {
                 .par_iter()
                 .map(|x| {
                     // 'A' == 65, 'Z' == 90
-                    let is_upper = self.check_scalar_range(x, 65, 90);
-                    let converted = self.0.scalar_add_parallelized(x, 32);
+                    let (is_upper, converted) = rayon::join(
+                        || self.check_scalar_range(x, 65, 90),
+                        || self.0.scalar_add_parallelized(x, 32),
+                    );
                     // (is_upper & converted) | (!is_upper & x)
                     self.0.if_then_else_parallelized(&is_upper, &converted, x)
                 })
@@ -475,8 +575,10 @@ impl ServerKey {
                 .par_iter()
                 .map(|x| {
                     // 'a' == 97, 'z' == 122
-                    let is_lower = self.check_scalar_range(x, 97, 122);
-                    let converted = self.0.scalar_sub_parallelized(x, 32);
+                    let (is_lower, converted) = rayon::join(
+                        || self.check_scalar_range(x, 97, 122),
+                        || self.0.scalar_sub_parallelized(x, 32),
+                    );
                     // (is_lower & converted) | (!is_lower & x)
                     self.0.if_then_else_parallelized(&is_lower, &converted, x)
                 })
@@ -484,55 +586,278 @@ impl ServerKey {
         )
     }
 
-    /// Implementation of [`[T]::concat`](slice::concat)
+    /// Returns the concatenation of this encrypted string and another as a new [`FheString`]
+    /// and is equivalent to the `+` operator.
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s1 = client_key.encrypt_str("hello").unwrap();
+    /// let s2 = client_key.encrypt_str("world").unwrap();
+    /// assert_eq!("helloworld", client_key.decrypt_str(&server_key.concat(&s1, &s2)));
+    /// ```
     pub fn concat(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheString {
-        todo!()
+        let fst = encrypted_str.as_ref();
+        let snd = other_encrypted_str.as_ref();
+
+        if fst.len() < 2 {
+            return other_encrypted_str.clone();
+        } else if snd.len() < 2 {
+            return encrypted_str.clone();
+        }
+        let fst_ended = fst[..fst.len() - 1]
+            .iter()
+            .map(|x| self.0.scalar_eq_parallelized(x, 0));
+        let mut result = Vec::with_capacity(fst.len() + snd.len() - 1);
+        result.par_extend(fst[..fst.len() - 1].par_iter().cloned());
+        result.par_extend(snd.par_iter().cloned());
+        // TODO: can the fold be parallelized? (unsure about the identity and associativity)
+        FheString::new_unchecked(
+            fst_ended
+                .enumerate()
+                .fold(
+                    (result, self.false_ct()),
+                    |(mut result, previous_ended), (i, ended)| {
+                        let cond = self.0.bitand_parallelized(
+                            &self.0.bitnot_parallelized(&previous_ended),
+                            &ended,
+                        );
+                        result[i..].par_iter_mut().enumerate().for_each(|(j, x)| {
+                            if j < snd.len() {
+                                *x = self.0.if_then_else_parallelized(&cond, &snd[j], x);
+                            } else {
+                                *x = self.0.if_then_else_parallelized(&cond, &self.false_ct(), x);
+                            }
+                        });
+                        (result, ended)
+                    },
+                )
+                .0,
+        )
     }
 
-    /// This method tests greater than or equal to (for `self` and `other`) and is used by the `>=`
-    /// operator.
+    /// This method tests greater than or equal to (for `encrypted_str` and `other_encrypted_str`)
+    /// and is equivalent to the `>=` operator.
     ///
     /// # Examples
     ///
     /// ```
-    /// assert_eq!(1.0 >= 1.0, true);
-    /// assert_eq!(1.0 >= 2.0, false);
-    /// assert_eq!(2.0 >= 1.0, true);
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s1 = client_key.encrypt_str("A").unwrap();
+    /// let s2 = client_key.encrypt_str("B").unwrap();
+    /// assert!(!client_key.ge(&s1, &s2));
+    /// assert!(client_key.ge(&s1, &s1));
+    /// assert!(client_key.ge(&s2, &s1));
     /// ```
     #[inline]
     #[must_use]
-    pub fn ge(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> bool {
-        todo!()
+    pub fn ge(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
+        let (fst_len, snd_len) =
+            rayon::join(|| self.len(encrypted_str), || self.len(other_encrypted_str));
+        let (shorter, (all_ge, any_ne)) = rayon::join(
+            || self.0.lt_parallelized(&fst_len, &snd_len),
+            || {
+                encrypted_str
+                    .as_ref()
+                    .par_iter()
+                    .zip(other_encrypted_str.as_ref().par_iter())
+                    .map(|(x, y)| {
+                        rayon::join(
+                            || {
+                                let eq_zero = self.0.scalar_eq_parallelized(x, 0);
+                                self.0
+                                    .bitor_parallelized(&self.0.ge_parallelized(x, y), &eq_zero)
+                            },
+                            || {
+                                let ne_zero = self.0.scalar_ne_parallelized(x, 0);
+                                self.0
+                                    .bitand_parallelized(&ne_zero, &self.0.ne_parallelized(x, y))
+                            },
+                        )
+                    })
+                    .reduce(
+                        || (self.true_ct(), self.false_ct()),
+                        |(acc_ge, acc_eq), (x_ge, x_eq)| {
+                            rayon::join(
+                                || self.0.bitand_parallelized(&acc_ge, &x_ge),
+                                || self.0.bitor_parallelized(&acc_eq, &x_eq),
+                            )
+                        },
+                    )
+            },
+        );
+        let (shorter_ne, not_shorter) = rayon::join(
+            || self.0.bitand_parallelized(&shorter, &any_ne),
+            || self.0.bitnot_parallelized(&shorter),
+        );
+        self.0.bitand_parallelized(
+            &all_ge,
+            &self.0.bitor_parallelized(&shorter_ne, &not_shorter),
+        )
     }
 
-    /// This method tests less than or equal to (for `self` and `other`) and is used by the `<=`
-    /// operator.
+    /// This method tests less than or equal to (for `encrypted_str` and `other_encrypted_str`)
+    /// and is equivalent to the `<=` operator.
     ///
     /// # Examples
     ///
     /// ```
-    /// assert_eq!(1.0 <= 1.0, true);
-    /// assert_eq!(1.0 <= 2.0, true);
-    /// assert_eq!(2.0 <= 1.0, false);
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s1 = client_key.encrypt_str("A").unwrap();
+    /// let s2 = client_key.encrypt_str("B").unwrap();
+    /// assert!(client_key.le(&s1, &ss));
+    /// assert!(client_key.le(&s1, &s2));
+    /// assert!(!client_key.le(&s2, &s1));
     /// ```
     #[inline]
     #[must_use]
-    pub fn le(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> bool {
-        todo!()
+    pub fn le(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
+        let (fst_len, snd_len) =
+            rayon::join(|| self.len(encrypted_str), || self.len(other_encrypted_str));
+        let (longer, (all_le, any_ne)) = rayon::join(
+            || self.0.gt_parallelized(&fst_len, &snd_len),
+            || {
+                encrypted_str
+                    .as_ref()
+                    .par_iter()
+                    .zip(other_encrypted_str.as_ref().par_iter())
+                    .map(|(x, y)| {
+                        rayon::join(
+                            || {
+                                let eq_zero = self.0.scalar_eq_parallelized(y, 0);
+                                self.0
+                                    .bitor_parallelized(&self.0.le_parallelized(x, y), &eq_zero)
+                            },
+                            || {
+                                let ne_zero = self.0.scalar_ne_parallelized(y, 0);
+                                self.0
+                                    .bitand_parallelized(&ne_zero, &self.0.ne_parallelized(x, y))
+                            },
+                        )
+                    })
+                    .reduce(
+                        || (self.true_ct(), self.false_ct()),
+                        |(acc_le, acc_eq), (x_le, x_eq)| {
+                            rayon::join(
+                                || self.0.bitand_parallelized(&acc_le, &x_le),
+                                || self.0.bitor_parallelized(&acc_eq, &x_eq),
+                            )
+                        },
+                    )
+            },
+        );
+        let (longer_ne, not_longer) = rayon::join(
+            || self.0.bitand_parallelized(&longer, &any_ne),
+            || self.0.bitnot_parallelized(&longer),
+        );
+        self.0
+            .bitand_parallelized(&all_le, &self.0.bitor_parallelized(&longer_ne, &not_longer))
     }
 
-    /// This method tests for `!=`. The default implementation is almost always
-    /// sufficient, and should not be overridden without very good reason.
+    #[inline]
+    fn par_ne(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> FheBool {
+        fst.par_iter()
+            .zip(snd.par_iter())
+            .map(|(x, y)| self.0.ne_parallelized(x, y))
+            .reduce(|| self.false_ct(), |x, y| self.0.bitor_parallelized(&x, &y))
+    }
+
+    #[inline]
+    fn par_ne_zero(&self, fst: &[FheAsciiChar]) -> FheBool {
+        fst.par_iter()
+            .map(|x| self.0.scalar_ne_parallelized(x, 0))
+            .reduce(|| self.false_ct(), |x, y| self.0.bitor_parallelized(&x, &y))
+    }
+
+    /// This method tests inequality (for `encrypted_str` and `other_encrypted_str`)
+    /// and is equivalent to the `!=` operator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s1 = client_key.encrypt_str("A").unwrap();
+    /// let s2 = client_key.encrypt_str("B").unwrap();
+    /// assert!(client_key.ne(&s1, &s2));
+    /// assert!(!client_key.ne(&s1, &s1));
+    /// ```
     #[inline]
     #[must_use]
-    pub fn ne(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> bool {
-        todo!()
+    pub fn ne(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
+        let fst = encrypted_str.as_ref();
+        let snd = other_encrypted_str.as_ref();
+        match fst.len().cmp(&snd.len()) {
+            Ordering::Less => self.0.bitor_parallelized(
+                &self.par_ne(fst, &snd[..fst.len()]),
+                &self.par_ne_zero(&snd[fst.len()..]),
+            ),
+            Ordering::Equal => self.par_ne(fst, snd),
+            Ordering::Greater => self.0.bitor_parallelized(
+                &self.par_ne(&fst[..snd.len()], snd),
+                &self.par_ne_zero(&fst[snd.len()..]),
+            ),
+        }
     }
 
-    /// This method tests for `self` and `other` values to be equal, and is used
-    /// by `==`.
+    #[inline]
+    fn par_eq(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> FheBool {
+        fst.par_iter()
+            .zip(snd.par_iter())
+            .map(|(x, y)| self.0.eq_parallelized(x, y))
+            .reduce(|| self.true_ct(), |x, y| self.0.bitand_parallelized(&x, &y))
+    }
+
+    #[inline]
+    fn par_eq_zero(&self, fst: &[FheAsciiChar]) -> FheBool {
+        fst.par_iter()
+            .map(|x| self.0.scalar_eq_parallelized(x, 0))
+            .reduce(|| self.true_ct(), |x, y| self.0.bitand_parallelized(&x, &y))
+    }
+
+    /// This method tests equality (for `encrypted_str` and `other_encrypted_str`)
+    /// and is equivalent to the `==` operator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s1 = client_key.encrypt_str("A").unwrap();
+    /// let s2 = client_key.encrypt_str("B").unwrap();
+    /// assert!(client_key.eq(&s1, &s1));
+    /// assert!(!client_key.eq(&s1, &s2));
+    /// ```
     #[must_use]
-    pub fn eq(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> bool {
-        todo!()
+    pub fn eq(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
+        let fst = encrypted_str.as_ref();
+        let snd = other_encrypted_str.as_ref();
+        match fst.len().cmp(&snd.len()) {
+            Ordering::Less => self.0.bitand_parallelized(
+                &self.par_eq(fst, &snd[..fst.len()]),
+                &self.par_eq_zero(&snd[fst.len()..]),
+            ),
+            Ordering::Equal => self.par_eq(fst, snd),
+            Ordering::Greater => self.0.bitand_parallelized(
+                &self.par_eq(&fst[..snd.len()], snd),
+                &self.par_eq_zero(&fst[snd.len()..]),
+            ),
+        }
     }
 }
