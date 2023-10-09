@@ -44,6 +44,9 @@ combine = "4.6.6"
 env_logger = "0.10.0"
 log = "0.4.19"
 # End regex-engine deps
+# Begin fhe-strings deps (+ regex-engine deps)
+dashmap = "5.5.3"
+# End fhe-strings deps
 
 [build-dependencies]
 cbindgen = { version = "0.26.0", optional = true }

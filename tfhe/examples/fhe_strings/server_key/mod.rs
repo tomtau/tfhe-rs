@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tfhe::integer::ServerKey as IntegerServerKey;
 
 use crate::{
-    ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number, Pattern},
+    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Number, Pattern},
     client_key::{ClientKey, NUM_BLOCKS},
 };
 
@@ -47,55 +47,121 @@ impl ServerKey {
         self.0.bitand_parallelized(&ge_from, &le_to)
     }
 
-    /// Returns `true` if the given pattern matches a sub-slice of
-    /// this string slice.
+    /// Returns an encrypted `true` (`1`) if the given pattern matches a sub-slice of
+    /// `encrypted_str`.
     ///
-    /// Returns `false` if it does not.
+    /// Returns an encrypted `false` (`0`) if it does not.
     ///
-    /// The [pattern] can be a `&str`, [`char`], a slice of [`char`]s, or a
-    /// function or closure that determines if a character matches.
-    ///
-    /// [`char`]: prim@char
-    /// [pattern]: self::pattern
+    /// The pattern can be a clear `&str` or an encrypted &FheString.
     ///
     /// # Examples
     ///
     /// ```
-    /// let bananas = "bananas";
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
     ///
-    /// assert!(bananas.contains("nana"));
-    /// assert!(!bananas.contains("apples"));
+    /// let bananas = client_key.encrypt_str("bananas").unwrap();
+    /// assert!(client_key.decrypt_bool(&server_key.contains(&bananas, "nana")));
+    /// let nana = client_key.encrypt_str("nana").unwrap();
+    /// assert!(client_key.decrypt_bool(&server_key.contains(&bananas, nana)));
+    /// assert!(!client_key.decrypt_bool(&server_key.starts_with(&bananas, "apples")));
+    /// let apples = client_key.encrypt_str("apples").unwrap();
+    /// assert!(!client_key.decrypt_bool(&server_key.starts_with(&bananas, &apples)));
     /// ```
-    ///
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[inline]
-    pub fn contains<'a>(&self, encrypted_str: &FheString, pat: Pattern<'a>) -> bool {
-        todo!()
+    pub fn contains<'a, P: Into<Pattern<'a>>>(&self, encrypted_str: &FheString, pat: P) -> FheBool {
+        match pat.into() {
+            Pattern::Clear(pat) => {
+                if pat.is_empty() {
+                    return self.true_ct();
+                }
+                if pat.len() > encrypted_str.as_ref().len() {
+                    return self.false_ct();
+                }
+                let fst = encrypted_str.as_ref();
+                fst.par_windows(pat.len())
+                    .map(|window| self.starts_with_clear_par(window, pat))
+                    .reduce(|| self.false_ct(), |x, y| self.0.bitor_parallelized(&x, &y))
+            }
+            Pattern::Encrypted(pat) => {
+                let snd = pat.as_ref();
+                if snd.len() < 2 {
+                    return self.true_ct();
+                }
+                let fst = encrypted_str.as_ref();
+                (0..fst.len())
+                    .into_par_iter()
+                    .map(|i| self.starts_with_encrypted_par(&fst[i..], snd))
+                    .reduce(
+                        || self.is_empty(pat),
+                        |x, y| self.0.bitor_parallelized(&x, &y),
+                    )
+            }
+        }
     }
 
-    /// Returns `true` if the given pattern matches a suffix of this
-    /// string slice.
+    /// Returns an encrypted `true` (`1`) if the given pattern matches a suffix
+    /// `encrypted_str`.
     ///
-    /// Returns `false` if it does not.
+    /// Returns an encrypted `false` (`0`) if it does not.
     ///
-    /// The [pattern] can be a `&str`, [`char`], a slice of [`char`]s, or a
-    /// function or closure that determines if a character matches.
-    ///
-    /// [`char`]: prim@char
-    /// [pattern]: self::pattern
+    /// The pattern can be a clear `&str` or an encrypted &FheString.
     ///
     /// # Examples
     ///
     /// ```
-    /// let bananas = "bananas";
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
     ///
-    /// assert!(bananas.ends_with("anas"));
-    /// assert!(!bananas.ends_with("nana"));
+    /// let bananas = client_key.encrypt_str("bananas").unwrap();
+    /// assert!(client_key.decrypt_bool(&server_key.starts_with(&bananas, "anas")));
+    /// let anas = client_key.encrypt_str("anas").unwrap();
+    /// assert!(client_key.decrypt_bool(&server_key.starts_with(&bananas, &anas)));
+    /// assert!(!client_key.decrypt_bool(&server_key.starts_with(&bananas, "nana")));
+    /// let nana = client_key.encrypt_str("nana").unwrap();
+    /// assert!(!client_key.decrypt_bool(&server_key.starts_with(&bananas, &nana)));
     /// ```
-    pub fn ends_with<'a, P>(&self, encrypted_str: &FheString, pat: Pattern<'a>) -> bool {
-        todo!()
+    /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
+    /// API not fully fleshed out and ready to be stabilized
+    /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
+    pub fn ends_with<'a, P: Into<Pattern<'a>>>(
+        &self,
+        encrypted_str: &FheString,
+        pat: P,
+    ) -> FheBool {
+        match pat.into() {
+            Pattern::Clear(pat) => {
+                if pat.is_empty() {
+                    return self.true_ct();
+                }
+                if pat.len() > encrypted_str.as_ref().len() {
+                    return self.false_ct();
+                }
+                let fst = encrypted_str.as_ref();
+                fst.par_windows(pat.len() + 1)
+                    .map(|window| self.par_eq_clear(window, pat))
+                    .reduce(|| self.false_ct(), |x, y| self.0.bitor_parallelized(&x, &y))
+            }
+            Pattern::Encrypted(pat) => {
+                let snd = pat.as_ref();
+                if snd.len() < 2 {
+                    return self.true_ct();
+                }
+                let fst = encrypted_str.as_ref();
+                (0..fst.len())
+                    .into_par_iter()
+                    .map(|i| self.par_eq(&fst[i..], snd))
+                    .reduce(
+                        || self.is_empty(pat),
+                        |x, y| self.0.bitor_parallelized(&x, &y),
+                    )
+            }
+        }
     }
 
     #[inline]
@@ -210,51 +276,107 @@ impl ServerKey {
         }
     }
 
-    /// Returns the byte index of the first character of this string slice that
-    /// matches the pattern.
+    /// Returns an encrypted option (a tuple: a flag, i.e. encrypted `1`, and a byte index)
+    /// that contains the byte index for the first character of the first match of the pattern in
+    /// `encrypted_str`.
     ///
-    /// Returns [`None`] if the pattern doesn't match.
+    /// Returns an encrypted `false` (`0` in the first tuple component) if the pattern doesn't match.
     ///
-    /// The [pattern] can be a `&str`, [`char`], a slice of [`char`]s, or a
-    /// function or closure that determines if a character matches.
-    ///
-    /// [`char`]: prim@char
-    /// [pattern]: self::pattern
+    /// The pattern can be a clear `&str` or an encrypted &FheString.
     ///
     /// # Examples
     ///
-    /// Simple patterns:
-    ///
     /// ```
-    /// let s = "Löwe 老虎 Léopard Gepardi";
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
     ///
-    /// assert_eq!(s.find('L'), Some(0));
-    /// assert_eq!(s.find('é'), Some(14));
-    /// assert_eq!(s.find("pard"), Some(17));
+    /// let bananas = client_key.encrypt_str("bananas").unwrap();
+    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, "a")), Some(1));
+    /// let a = client_key.encrypt_str("a").unwrap();
+    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, a)), Some(1));
+    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, "z")), None);
+    /// let z = client_key.encrypt_str("z").unwrap();
+    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, z)), None);
     /// ```
-    ///
-    /// More complex patterns using point-free style and closures:
-    ///
-    /// ```
-    /// let s = "Löwe 老虎 Léopard";
-    ///
-    /// assert_eq!(s.find(char::is_whitespace), Some(5));
-    /// assert_eq!(s.find(char::is_lowercase), Some(1));
-    /// assert_eq!(s.find(|c: char| c.is_whitespace() || c.is_lowercase()), Some(1));
-    /// assert_eq!(s.find(|c: char| (c < 'o') && (c > 'a')), Some(4));
-    /// ```
-    ///
-    /// Not finding the pattern:
-    ///
-    /// ```
-    /// let s = "Löwe 老虎 Léopard";
-    /// let x: &[_] = &['1', '2'];
-    ///
-    /// assert_eq!(s.find(x), None);
-    /// ```
+    /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
+    /// API not fully fleshed out and ready to be stabilized
+    /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[inline]
-    pub fn find<'a>(&self, encrypted_str: &FheString, pat: Pattern<'a>) -> Option<usize> {
-        todo!()
+    pub fn find<'a, P: Into<Pattern<'a>>>(
+        &self,
+        encrypted_str: &FheString,
+        pat: P,
+    ) -> FheOption<FheUsize> {
+        match pat.into() {
+            Pattern::Clear(pat) => {
+                if pat.is_empty() {
+                    return (self.true_ct(), self.false_ct());
+                }
+                if pat.len() > encrypted_str.as_ref().len() {
+                    return (self.false_ct(), self.false_ct());
+                }
+                let fst = encrypted_str.as_ref();
+                fst.par_windows(pat.len())
+                    .enumerate()
+                    .map(|(i, window)| {
+                        (
+                            self.starts_with_clear_par(window, pat),
+                            self.0.create_trivial_radix(i as u64, NUM_BLOCKS),
+                        )
+                    })
+                    .reduce(
+                        || {
+                            (
+                                self.false_ct(),
+                                self.0.create_trivial_radix(u64::MAX, NUM_BLOCKS),
+                            )
+                        },
+                        |(x_starts, x_i), (y_starts, y_i)| {
+                            rayon::join(
+                                || self.0.bitor_parallelized(&x_starts, &y_starts),
+                                || {
+                                    self.0.if_then_else_parallelized(
+                                        &self.0.scalar_ne_parallelized(&x_starts, 0),
+                                        &x_i,
+                                        &y_i,
+                                    )
+                                },
+                            )
+                        },
+                    )
+            }
+            Pattern::Encrypted(pat) => {
+                let snd = pat.as_ref();
+                if snd.len() < 2 {
+                    return (self.true_ct(), self.false_ct());
+                }
+                let fst = encrypted_str.as_ref();
+                (0..fst.len())
+                    .into_par_iter()
+                    .map(|i| {
+                        (
+                            self.starts_with_encrypted_par(&fst[i..], snd),
+                            self.0.create_trivial_radix(i as u64, NUM_BLOCKS),
+                        )
+                    })
+                    .reduce(
+                        || (self.is_empty(pat), self.false_ct()),
+                        |(x_starts, x_i), (y_starts, y_i)| {
+                            rayon::join(
+                                || self.0.bitor_parallelized(&x_starts, &y_starts),
+                                || {
+                                    self.0.if_then_else_parallelized(
+                                        &self.0.scalar_ne_parallelized(&x_starts, 0),
+                                        &x_i,
+                                        &y_i,
+                                    )
+                                },
+                            )
+                        },
+                    )
+            }
+        }
     }
 
     /// Returns an encrypted `true` (`1`) if `encrypted_str` has a length of zero bytes.
@@ -394,53 +516,151 @@ impl ServerKey {
         todo!()
     }
 
-    /// Returns the byte index for the first character of the last match of the pattern in
-    /// this string slice.
+    /// Returns an encrypted option (a tuple: a flag, i.e. encrypted `1`, and a byte index)
+    /// that contains the byte index for the first character of the last match of the pattern in
+    /// `encrypted_str`.
     ///
-    /// Returns [`None`] if the pattern doesn't match.
+    /// Returns an encrypted `false` (`0` in the first tuple component) if the pattern doesn't match.
     ///
-    /// The [pattern] can be a `&str`, [`char`], a slice of [`char`]s, or a
-    /// function or closure that determines if a character matches.
-    ///
-    /// [`char`]: prim@char
-    /// [pattern]: self::pattern
+    /// The pattern can be a clear `&str` or an encrypted &FheString.
     ///
     /// # Examples
     ///
-    /// Simple patterns:
-    ///
     /// ```
-    /// let s = "Löwe 老虎 Léopard Gepardi";
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
     ///
-    /// assert_eq!(s.rfind('L'), Some(13));
-    /// assert_eq!(s.rfind('é'), Some(14));
-    /// assert_eq!(s.rfind("pard"), Some(24));
+    /// let bananas = client_key.encrypt_str("bananas").unwrap();
+    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, "a")), Some(5));
+    /// let a = client_key.encrypt_str("a").unwrap();
+    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, a)), Some(5));
+    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, "z")), None);
+    /// let z = client_key.encrypt_str("z").unwrap();
+    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, z)), None);
     /// ```
-    ///
-    /// More complex patterns with closures:
-    ///
-    /// ```
-    /// let s = "Löwe 老虎 Léopard";
-    ///
-    /// assert_eq!(s.rfind(char::is_whitespace), Some(12));
-    /// assert_eq!(s.rfind(char::is_lowercase), Some(20));
-    /// ```
-    ///
-    /// Not finding the pattern:
-    ///
-    /// ```
-    /// let s = "Löwe 老虎 Léopard";
-    /// let x: &[_] = &['1', '2'];
-    ///
-    /// assert_eq!(s.rfind(x), None);
+    /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
+    /// API not fully fleshed out and ready to be stabilized
+    /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     /// ```
     #[inline]
-    pub fn rfind<'a>(&self, encrypted_str: &FheString, pat: Pattern<'a>) -> Option<usize> {
-        todo!()
+    pub fn rfind<'a, P: Into<Pattern<'a>>>(
+        &self,
+        encrypted_str: &FheString,
+        pat: P,
+    ) -> FheOption<FheUsize> {
+        match pat.into() {
+            Pattern::Clear(pat) => {
+                if pat.is_empty() {
+                    return (self.true_ct(), self.len(encrypted_str));
+                }
+                if pat.len() > encrypted_str.as_ref().len() {
+                    return (self.false_ct(), self.false_ct());
+                }
+                let fst = encrypted_str.as_ref();
+                fst.par_windows(pat.len())
+                    .enumerate()
+                    .map(|(i, window)| {
+                        (
+                            self.starts_with_clear_par(window, pat),
+                            self.0.create_trivial_radix(i as u64, NUM_BLOCKS),
+                        )
+                    })
+                    .reduce(
+                        || {
+                            (
+                                self.false_ct(),
+                                self.0.create_trivial_radix(u64::MAX, NUM_BLOCKS),
+                            )
+                        },
+                        |(x_starts, x_i), (y_starts, y_i)| {
+                            rayon::join(
+                                || self.0.bitor_parallelized(&x_starts, &y_starts),
+                                || {
+                                    self.0.if_then_else_parallelized(
+                                        &self.0.scalar_ne_parallelized(&y_starts, 0),
+                                        &y_i,
+                                        &x_i,
+                                    )
+                                },
+                            )
+                        },
+                    )
+            }
+            Pattern::Encrypted(pat) => {
+                let snd = pat.as_ref();
+                let len = self.len(encrypted_str);
+                if snd.len() < 2 {
+                    return (self.true_ct(), len);
+                }
+                let fst = encrypted_str.as_ref();
+                (0..fst.len())
+                    .into_par_iter()
+                    .map(|i| {
+                        (
+                            self.starts_with_encrypted_par(&fst[i..], snd),
+                            self.0.if_then_else_parallelized(
+                                &self.0.scalar_eq_parallelized(&fst[i], 0),
+                                &len,
+                                &self.0.create_trivial_radix(i as u64, NUM_BLOCKS),
+                            ),
+                        )
+                    })
+                    .reduce(
+                        || (self.is_empty(pat), len.clone()),
+                        |(x_starts, x_i), (y_starts, y_i)| {
+                            rayon::join(
+                                || self.0.bitor_parallelized(&x_starts, &y_starts),
+                                || {
+                                    self.0.if_then_else_parallelized(
+                                        &self.0.scalar_ne_parallelized(&y_starts, 0),
+                                        &y_i,
+                                        &x_i,
+                                    )
+                                },
+                            )
+                        },
+                    )
+            }
+        }
     }
 
-    /// Returns an encrypted `true` (`1`) if the given pattern matches a prefix of this
-    /// string slice.
+    #[inline]
+    fn starts_with_clear_par(&self, enc_ref: &[FheAsciiChar], pat: &str) -> FheBool {
+        if enc_ref.len() < pat.len() {
+            self.false_ct()
+        } else if pat.is_empty() {
+            self.true_ct()
+        } else {
+            enc_ref
+                .par_iter()
+                .zip(pat.as_bytes().par_iter())
+                .map(|(a, b)| self.0.scalar_eq_parallelized(a, *b as u64))
+                .reduce(|| self.true_ct(), |s, x| self.0.bitand_parallelized(&s, &x))
+        }
+    }
+
+    #[inline]
+    fn starts_with_encrypted_par(&self, enc_ref: &[FheAsciiChar], pat: &[FheAsciiChar]) -> FheBool {
+        if pat.as_ref().len() < 2 {
+            self.true_ct()
+        } else {
+            enc_ref
+                .par_iter()
+                .zip(pat.as_ref().par_iter())
+                .map(|(a, b)| {
+                    let (pattern_ended, a_eq_b) = rayon::join(
+                        || self.0.scalar_eq_parallelized(b, 0),
+                        || self.0.eq_parallelized(a, b),
+                    );
+                    self.bool_if_then_else(&pattern_ended, &self.true_ct(), &a_eq_b)
+                })
+                .reduce(|| self.true_ct(), |s, x| self.0.bitand_parallelized(&s, &x))
+        }
+    }
+
+    /// Returns an encrypted `true` (`1`) if the given pattern matches a prefix
+    /// `encrypted_str`.
     ///
     /// Returns an encrypted `false` (`0`) if it does not.
     ///
@@ -470,40 +690,9 @@ impl ServerKey {
         pat: P,
     ) -> FheBool {
         match pat.into() {
-            Pattern::Clear(pat) => {
-                if encrypted_str.as_ref().len() < pat.len() {
-                    self.false_ct()
-                } else if pat.is_empty() {
-                    self.true_ct()
-                } else {
-                    encrypted_str
-                        .as_ref()
-                        .par_iter()
-                        .zip(pat.as_bytes().par_iter())
-                        .map(|(a, b)| self.0.scalar_eq_parallelized(a, *b as u64))
-                        .reduce(|| self.true_ct(), |s, x| self.0.bitand_parallelized(&s, &x))
-                }
-            }
+            Pattern::Clear(pat) => self.starts_with_clear_par(encrypted_str.as_ref(), pat),
             Pattern::Encrypted(pat) => {
-                if encrypted_str.as_ref().len() < pat.as_ref().len() {
-                    self.false_ct()
-                } else if pat.as_ref().len() < 2 {
-                    self.true_ct()
-                } else {
-                    encrypted_str
-                        .as_ref()
-                        .par_iter()
-                        .zip(pat.as_ref().par_iter())
-                        .map(|(a, b)| {
-                            let pattern_ended = self.0.scalar_eq_parallelized(b, 0);
-                            self.0.if_then_else_parallelized(
-                                &pattern_ended,
-                                &self.true_ct(),
-                                &self.0.eq_parallelized(&a, &b),
-                            )
-                        })
-                        .reduce(|| self.true_ct(), |s, x| self.0.bitand_parallelized(&s, &x))
-                }
+                self.starts_with_encrypted_par(encrypted_str.as_ref(), pat.as_ref())
             }
         }
     }
@@ -642,8 +831,50 @@ impl ServerKey {
         )
     }
 
+    #[inline]
+    fn par_ge(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> (FheBool, FheBool) {
+        fst.par_iter()
+            .zip(snd.par_iter())
+            .map(|(x, y)| {
+                rayon::join(
+                    || self.0.ne_parallelized(x, y),
+                    || self.0.gt_parallelized(x, y),
+                )
+            })
+            .reduce(
+                || (self.false_ct(), self.true_ct()),
+                |(previous_ne, previous_gt), (current_ne, current_gt)| {
+                    rayon::join(
+                        || self.0.bitor_parallelized(&previous_ne, &current_ne),
+                        || self.bool_if_then_else(&previous_ne, &previous_gt, &current_gt),
+                    )
+                },
+            )
+    }
+
+    #[inline]
+    fn bool_if_then_else(&self, cond: &FheBool, branch_a: &FheBool, branch_b: &FheBool) -> FheBool {
+        let (take_a, take_b) = rayon::join(
+            || self.0.bitand_parallelized(cond, branch_a),
+            || {
+                self.0
+                    .bitand_parallelized(&self.0.bitnot_parallelized(cond), branch_b)
+            },
+        );
+        self.0.bitor_parallelized(&take_a, &take_b)
+    }
+
     /// This method tests greater than or equal to (for `encrypted_str` and `other_encrypted_str`)
-    /// and is equivalent to the `>=` operator.
+    /// and is equivalent to the `>=` operator. The ordering is lexicographical.
+    ///
+    /// Lexicographical comparison is an operation with the following properties:
+    ///
+    /// - Two sequences are compared element by element.
+    /// - The first mismatching element defines which sequence is lexicographically less or greater than the other.
+    /// - If one sequence is a prefix of another, the shorter sequence is lexicographically less than the other.
+    /// - If two sequence have equivalent elements and are of the same length, then the sequences are lexicographically equal.
+    /// - An empty sequence is lexicographically less than any non-empty sequence.
+    /// - Two empty sequences are lexicographically equal.
     ///
     /// # Examples
     ///
@@ -661,52 +892,56 @@ impl ServerKey {
     #[inline]
     #[must_use]
     pub fn ge(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
-        let (fst_len, snd_len) =
-            rayon::join(|| self.len(encrypted_str), || self.len(other_encrypted_str));
-        let (shorter, (all_ge, any_ne)) = rayon::join(
-            || self.0.lt_parallelized(&fst_len, &snd_len),
-            || {
-                encrypted_str
-                    .as_ref()
-                    .par_iter()
-                    .zip(other_encrypted_str.as_ref().par_iter())
-                    .map(|(x, y)| {
-                        rayon::join(
-                            || {
-                                let eq_zero = self.0.scalar_eq_parallelized(x, 0);
-                                self.0
-                                    .bitor_parallelized(&self.0.ge_parallelized(x, y), &eq_zero)
-                            },
-                            || {
-                                let ne_zero = self.0.scalar_ne_parallelized(x, 0);
-                                self.0
-                                    .bitand_parallelized(&ne_zero, &self.0.ne_parallelized(x, y))
-                            },
-                        )
-                    })
-                    .reduce(
-                        || (self.true_ct(), self.false_ct()),
-                        |(acc_ge, acc_eq), (x_ge, x_eq)| {
-                            rayon::join(
-                                || self.0.bitand_parallelized(&acc_ge, &x_ge),
-                                || self.0.bitor_parallelized(&acc_eq, &x_eq),
-                            )
-                        },
+        let fst = encrypted_str.as_ref();
+        let snd = other_encrypted_str.as_ref();
+        match fst.len().cmp(&snd.len()) {
+            Ordering::Less => {
+                let (any_ne, leftmost_gt) = self.par_ge(fst, &snd[..fst.len()]);
+                self.bool_if_then_else(&any_ne, &leftmost_gt, &self.par_eq_zero(&snd[fst.len()..]))
+            }
+            Ordering::Equal => {
+                let (any_ne, leftmost_gt) = self.par_ge(fst, snd);
+                self.bool_if_then_else(&any_ne, &leftmost_gt, &self.true_ct())
+            }
+            Ordering::Greater => {
+                let (any_ne, leftmost_gt) = self.par_ge(&fst[..snd.len()], snd);
+                self.bool_if_then_else(&any_ne, &leftmost_gt, &self.true_ct())
+            }
+        }
+    }
+
+    #[inline]
+    fn par_le(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> (FheBool, FheBool) {
+        fst.par_iter()
+            .zip(snd.par_iter())
+            .map(|(x, y)| {
+                rayon::join(
+                    || self.0.ne_parallelized(x, y),
+                    || self.0.lt_parallelized(x, y),
+                )
+            })
+            .reduce(
+                || (self.false_ct(), self.true_ct()),
+                |(previous_ne, previous_lt), (current_ne, current_lt)| {
+                    rayon::join(
+                        || self.0.bitor_parallelized(&previous_ne, &current_ne),
+                        || self.bool_if_then_else(&previous_ne, &previous_lt, &current_lt),
                     )
-            },
-        );
-        let (shorter_ne, not_shorter) = rayon::join(
-            || self.0.bitand_parallelized(&shorter, &any_ne),
-            || self.0.bitnot_parallelized(&shorter),
-        );
-        self.0.bitand_parallelized(
-            &all_ge,
-            &self.0.bitor_parallelized(&shorter_ne, &not_shorter),
-        )
+                },
+            )
     }
 
     /// This method tests less than or equal to (for `encrypted_str` and `other_encrypted_str`)
-    /// and is equivalent to the `<=` operator.
+    /// and is equivalent to the `<=` operator. The ordering is lexicographical.
+    ///
+    /// Lexicographical comparison is an operation with the following properties:
+    ///
+    /// - Two sequences are compared element by element.
+    /// - The first mismatching element defines which sequence is lexicographically less or greater than the other.
+    /// - If one sequence is a prefix of another, the shorter sequence is lexicographically less than the other.
+    /// - If two sequence have equivalent elements and are of the same length, then the sequences are lexicographically equal.
+    /// - An empty sequence is lexicographically less than any non-empty sequence.
+    /// - Two empty sequences are lexicographically equal.
     ///
     /// # Examples
     ///
@@ -724,46 +959,22 @@ impl ServerKey {
     #[inline]
     #[must_use]
     pub fn le(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
-        let (fst_len, snd_len) =
-            rayon::join(|| self.len(encrypted_str), || self.len(other_encrypted_str));
-        let (longer, (all_le, any_ne)) = rayon::join(
-            || self.0.gt_parallelized(&fst_len, &snd_len),
-            || {
-                encrypted_str
-                    .as_ref()
-                    .par_iter()
-                    .zip(other_encrypted_str.as_ref().par_iter())
-                    .map(|(x, y)| {
-                        rayon::join(
-                            || {
-                                let eq_zero = self.0.scalar_eq_parallelized(y, 0);
-                                self.0
-                                    .bitor_parallelized(&self.0.le_parallelized(x, y), &eq_zero)
-                            },
-                            || {
-                                let ne_zero = self.0.scalar_ne_parallelized(y, 0);
-                                self.0
-                                    .bitand_parallelized(&ne_zero, &self.0.ne_parallelized(x, y))
-                            },
-                        )
-                    })
-                    .reduce(
-                        || (self.true_ct(), self.false_ct()),
-                        |(acc_le, acc_eq), (x_le, x_eq)| {
-                            rayon::join(
-                                || self.0.bitand_parallelized(&acc_le, &x_le),
-                                || self.0.bitor_parallelized(&acc_eq, &x_eq),
-                            )
-                        },
-                    )
-            },
-        );
-        let (longer_ne, not_longer) = rayon::join(
-            || self.0.bitand_parallelized(&longer, &any_ne),
-            || self.0.bitnot_parallelized(&longer),
-        );
-        self.0
-            .bitand_parallelized(&all_le, &self.0.bitor_parallelized(&longer_ne, &not_longer))
+        let fst = encrypted_str.as_ref();
+        let snd = other_encrypted_str.as_ref();
+        match fst.len().cmp(&snd.len()) {
+            Ordering::Less => {
+                let (any_ne, leftmost_lt) = self.par_le(fst, &snd[..fst.len()]);
+                self.bool_if_then_else(&any_ne, &leftmost_lt, &self.par_eq_zero(&snd[fst.len()..]))
+            }
+            Ordering::Equal => {
+                let (any_ne, leftmost_lt) = self.par_le(fst, snd);
+                self.bool_if_then_else(&any_ne, &leftmost_lt, &self.true_ct())
+            }
+            Ordering::Greater => {
+                let (any_ne, leftmost_lt) = self.par_le(&fst[..snd.len()], snd);
+                self.bool_if_then_else(&any_ne, &leftmost_lt, &self.par_eq_zero(&fst[snd.len()..]))
+            }
+        }
     }
 
     #[inline]
@@ -819,6 +1030,14 @@ impl ServerKey {
         fst.par_iter()
             .zip(snd.par_iter())
             .map(|(x, y)| self.0.eq_parallelized(x, y))
+            .reduce(|| self.true_ct(), |x, y| self.0.bitand_parallelized(&x, &y))
+    }
+
+    #[inline]
+    fn par_eq_clear(&self, fst: &[FheAsciiChar], snd: &str) -> FheBool {
+        fst.par_iter()
+            .zip(snd.as_bytes().par_iter().chain(rayon::iter::once(&0u8)))
+            .map(|(x, y)| self.0.scalar_eq_parallelized(x, *y))
             .reduce(|| self.true_ct(), |x, y| self.0.bitand_parallelized(&x, &y))
     }
 

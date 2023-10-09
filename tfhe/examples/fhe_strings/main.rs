@@ -54,6 +54,52 @@ fn main() -> io::Result<()> {
         })?;
 
         let now = Instant::now();
+        let contains = server_key.contains(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_contains_clear = client_key.decrypt_bool(&contains);
+        info!("`contains` FHE: {decrypted_contains_clear} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let contains = server_key.contains(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_contains_encrypted = client_key.decrypt_bool(&contains);
+        info!(
+            "`contains` FHE: {decrypted_contains_encrypted} (took {elapsed:?}) (encrypted pattern)"
+        );
+        info!(
+            "`contains` std: {}",
+            input_string.contains(pattern.as_str())
+        );
+
+        let now = Instant::now();
+        let ends_with = server_key.ends_with(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_ends_with_clear = client_key.decrypt_bool(&ends_with);
+        info!("`ends_with` FHE: {decrypted_ends_with_clear} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let contains = server_key.ends_with(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_ends_with_encrypted = client_key.decrypt_bool(&contains);
+        info!(
+            "`ends_with` FHE: {decrypted_ends_with_encrypted} (took {elapsed:?}) (encrypted pattern)"
+        );
+        info!(
+            "`ends_with` std: {}",
+            input_string.ends_with(pattern.as_str())
+        );
+
+        let now = Instant::now();
+        let find = server_key.find(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_find_clear = client_key.decrypt_option_usize(&find);
+        info!("`find` FHE: {decrypted_find_clear:?} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let find = server_key.find(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_find_encrypted = client_key.decrypt_option_usize(&find);
+        info!("`find` FHE: {decrypted_find_encrypted:?} (took {elapsed:?}) (encrypted pattern)");
+        info!("`find` std: {:?}", input_string.find(pattern.as_str()));
+
+        let now = Instant::now();
         let eq_ignore_case = server_key.eq_ignore_case(&encrypted_str, &encrypted_pattern);
         let elapsed = now.elapsed();
         let decrypted_eq_ignore_case = client_key.decrypt_bool(&eq_ignore_case);
@@ -76,6 +122,18 @@ fn main() -> io::Result<()> {
         let decrypted_len = client_key.decrypt_usize(&len);
         info!("`len` FHE: {decrypted_len} (took {elapsed:?})");
         info!("`len` std: {}", input_string.len());
+
+        let now = Instant::now();
+        let rfind = server_key.rfind(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_rfind_clear = client_key.decrypt_option_usize(&rfind);
+        info!("`rfind` FHE: {decrypted_rfind_clear:?} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let rfind = server_key.rfind(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_rfind_encrypted = client_key.decrypt_option_usize(&rfind);
+        info!("`rfind` FHE: {decrypted_rfind_encrypted:?} (took {elapsed:?}) (encrypted pattern)");
+        info!("`rfind` std: {:?}", input_string.rfind(pattern.as_str()));
 
         let now = Instant::now();
         let lowercase = server_key.to_lowercase(&encrypted_str);

@@ -6,7 +6,7 @@ use tfhe::{
     shortint::ShortintParameterSet,
 };
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ClientKey(IntegerClientKey);
@@ -32,6 +32,14 @@ impl ClientKey {
 
     pub fn decrypt_usize(&self, size: &FheUsize) -> usize {
         self.0.decrypt_radix::<u64>(size) as usize // FIXME: 32-bit archs?
+    }
+
+    pub fn decrypt_option_usize(&self, size: &FheOption<FheUsize>) -> Option<usize> {
+        if self.decrypt_bool(&size.0) {
+            Some(self.decrypt_usize(&size.1))
+        } else {
+            None
+        }
     }
 
     pub fn encrypt_str(

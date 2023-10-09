@@ -6,6 +6,7 @@ use crate::client_key::ClientKey;
 
 pub type FheBool = RadixCiphertext;
 pub type FheUsize = RadixCiphertext;
+pub type FheOption<T> = (FheBool, T);
 
 pub type FheAsciiChar = RadixCiphertext;
 
