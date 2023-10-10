@@ -47,6 +47,51 @@ impl ServerKey {
         self.0.bitand_parallelized(&ge_from, &le_to)
     }
 
+    #[inline]
+    fn if_then_else(
+        &self,
+        cond: Option<&FheBool>,
+        default_if_none: bool,
+        opt_a: &FheBool,
+        opt_b: &FheBool,
+    ) -> FheBool {
+        match cond {
+            Some(cond) => self.0.if_then_else_parallelized(cond, opt_a, opt_b),
+            None if default_if_none => opt_a.clone(),
+            _ => opt_b.clone(),
+        }
+    }
+
+    #[inline]
+    fn or(&self, a: Option<&FheBool>, b: Option<&FheBool>) -> Option<FheBool> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(self.0.bitor_parallelized(a, b)),
+            (Some(a), None) => Some(a.clone()),
+            (None, Some(b)) => Some(b.clone()),
+            (None, None) => None,
+        }
+    }
+
+    #[inline]
+    fn add(&self, a: Option<&FheUsize>, b: Option<&FheUsize>) -> Option<FheUsize> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(self.0.add_parallelized(a, b)),
+            (Some(a), None) => Some(a.clone()),
+            (None, Some(b)) => Some(b.clone()),
+            (None, None) => None,
+        }
+    }
+
+    #[inline]
+    fn and_true(&self, a: Option<&FheBool>, b: Option<&FheBool>) -> Option<FheBool> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(self.0.bitand_parallelized(a, b)),
+            (Some(a), None) => Some(a.clone()),
+            (None, Some(b)) => Some(b.clone()),
+            (None, None) => None,
+        }
+    }
+
     /// Returns an encrypted `true` (`1`) if the given pattern matches a sub-slice of
     /// `encrypted_str`.
     ///
@@ -84,8 +129,9 @@ impl ServerKey {
                 }
                 let fst = encrypted_str.as_ref();
                 fst.par_windows(pat.len())
-                    .map(|window| self.starts_with_clear_par(window, pat))
-                    .reduce(|| self.false_ct(), |x, y| self.0.bitor_parallelized(&x, &y))
+                    .map(|window| Some(self.starts_with_clear_par(window, pat)))
+                    .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
+                    .unwrap_or_else(|| self.false_ct())
             }
             Pattern::Encrypted(pat) => {
                 let snd = pat.as_ref();
@@ -144,8 +190,9 @@ impl ServerKey {
                 }
                 let fst = encrypted_str.as_ref();
                 fst.par_windows(pat.len() + 1)
-                    .map(|window| self.par_eq_clear(window, pat))
-                    .reduce(|| self.false_ct(), |x, y| self.0.bitor_parallelized(&x, &y))
+                    .map(|window| Some(self.par_eq_clear(window, pat)))
+                    .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
+                    .unwrap_or_else(|| self.false_ct())
             }
             Pattern::Encrypted(pat) => {
                 let snd = pat.as_ref();
@@ -226,15 +273,16 @@ impl ServerKey {
                                 .bitand_parallelized(&is_lower_y_not_x, &x_eq_converted_y)
                         },
                     );
-                self.0.bitor_parallelized(
+                Some(self.0.bitor_parallelized(
                     &x_eq_y,
                     &self.0.bitor_parallelized(
                         &is_lower_x_not_y_eq_converted_x,
                         &is_lower_y_not_x_eq_converted_y,
                     ),
-                )
+                ))
             })
-            .reduce(|| self.true_ct(), |x, y| self.0.bitand_parallelized(&x, &y))
+            .reduce(|| None, |x, y| self.and_true(x.as_ref(), y.as_ref()))
+            .unwrap_or_else(|| self.true_ct())
     }
 
     /// Checks that two encrypted strings are an ASCII case-insensitive match
@@ -317,34 +365,25 @@ impl ServerKey {
                     return (self.false_ct(), self.false_ct());
                 }
                 let fst = encrypted_str.as_ref();
-                fst.par_windows(pat.len())
+                let (found, index) = fst
+                    .par_windows(pat.len())
                     .enumerate()
                     .map(|(i, window)| {
                         (
-                            self.starts_with_clear_par(window, pat),
+                            Some(self.starts_with_clear_par(window, pat)),
                             self.0.create_trivial_radix(i as u64, NUM_BLOCKS),
                         )
                     })
                     .reduce(
-                        || {
-                            (
-                                self.false_ct(),
-                                self.0.create_trivial_radix(u64::MAX, NUM_BLOCKS),
-                            )
-                        },
+                        || (None, self.0.create_trivial_radix(u64::MAX, NUM_BLOCKS)),
                         |(x_starts, x_i), (y_starts, y_i)| {
                             rayon::join(
-                                || self.0.bitor_parallelized(&x_starts, &y_starts),
-                                || {
-                                    self.0.if_then_else_parallelized(
-                                        &self.0.scalar_ne_parallelized(&x_starts, 0),
-                                        &x_i,
-                                        &y_i,
-                                    )
-                                },
+                                || self.or(x_starts.as_ref(), y_starts.as_ref()),
+                                || self.if_then_else(x_starts.as_ref(), false, &x_i, &y_i),
                             )
                         },
-                    )
+                    );
+                (found.unwrap_or_else(|| self.false_ct()), index)
             }
             Pattern::Encrypted(pat) => {
                 let snd = pat.as_ref();
@@ -365,13 +404,7 @@ impl ServerKey {
                         |(x_starts, x_i), (y_starts, y_i)| {
                             rayon::join(
                                 || self.0.bitor_parallelized(&x_starts, &y_starts),
-                                || {
-                                    self.0.if_then_else_parallelized(
-                                        &self.0.scalar_ne_parallelized(&x_starts, 0),
-                                        &x_i,
-                                        &y_i,
-                                    )
-                                },
+                                || self.0.if_then_else_parallelized(&x_starts, &x_i, &y_i),
                             )
                         },
                     )
@@ -422,8 +455,9 @@ impl ServerKey {
         let fst = encrypted_str.as_ref();
         fst[..fst.len() - 1]
             .par_iter()
-            .map(|x| self.0.scalar_ne_parallelized(x, 0))
-            .reduce(|| self.false_ct(), |a, b| self.0.add_parallelized(&a, &b))
+            .map(|x| Some(self.0.scalar_ne_parallelized(x, 0)))
+            .reduce(|| None, |a, b| self.add(a.as_ref(), b.as_ref()))
+            .unwrap_or_else(|| self.false_ct())
     }
 
     /// Creates a new [`String`] by repeating a string `n` times.
@@ -558,34 +592,25 @@ impl ServerKey {
                     return (self.false_ct(), self.false_ct());
                 }
                 let fst = encrypted_str.as_ref();
-                fst.par_windows(pat.len())
+                let (found, index) = fst
+                    .par_windows(pat.len())
                     .enumerate()
                     .map(|(i, window)| {
                         (
-                            self.starts_with_clear_par(window, pat),
+                            Some(self.starts_with_clear_par(window, pat)),
                             self.0.create_trivial_radix(i as u64, NUM_BLOCKS),
                         )
                     })
                     .reduce(
-                        || {
-                            (
-                                self.false_ct(),
-                                self.0.create_trivial_radix(u64::MAX, NUM_BLOCKS),
-                            )
-                        },
+                        || (None, self.0.create_trivial_radix(u64::MAX, NUM_BLOCKS)),
                         |(x_starts, x_i), (y_starts, y_i)| {
                             rayon::join(
-                                || self.0.bitor_parallelized(&x_starts, &y_starts),
-                                || {
-                                    self.0.if_then_else_parallelized(
-                                        &self.0.scalar_ne_parallelized(&y_starts, 0),
-                                        &y_i,
-                                        &x_i,
-                                    )
-                                },
+                                || self.or(x_starts.as_ref(), y_starts.as_ref()),
+                                || self.if_then_else(y_starts.as_ref(), false, &y_i, &x_i),
                             )
                         },
-                    )
+                    );
+                (found.unwrap_or_else(|| self.false_ct()), index)
             }
             Pattern::Encrypted(pat) => {
                 let snd = pat.as_ref();
@@ -611,13 +636,7 @@ impl ServerKey {
                         |(x_starts, x_i), (y_starts, y_i)| {
                             rayon::join(
                                 || self.0.bitor_parallelized(&x_starts, &y_starts),
-                                || {
-                                    self.0.if_then_else_parallelized(
-                                        &self.0.scalar_ne_parallelized(&y_starts, 0),
-                                        &y_i,
-                                        &x_i,
-                                    )
-                                },
+                                || self.0.if_then_else_parallelized(&y_starts, &y_i, &x_i),
                             )
                         },
                     )
@@ -635,8 +654,9 @@ impl ServerKey {
             enc_ref
                 .par_iter()
                 .zip(pat.as_bytes().par_iter())
-                .map(|(a, b)| self.0.scalar_eq_parallelized(a, *b as u64))
-                .reduce(|| self.true_ct(), |s, x| self.0.bitand_parallelized(&s, &x))
+                .map(|(a, b)| Some(self.0.scalar_eq_parallelized(a, *b as u64)))
+                .reduce(|| None, |s, x| self.and_true(s.as_ref(), x.as_ref()))
+                .unwrap_or_else(|| self.false_ct())
         }
     }
 
@@ -653,9 +673,13 @@ impl ServerKey {
                         || self.0.scalar_eq_parallelized(b, 0),
                         || self.0.eq_parallelized(a, b),
                     );
-                    self.bool_if_then_else(&pattern_ended, &self.true_ct(), &a_eq_b)
+                    Some(
+                        self.0
+                            .if_then_else_parallelized(&pattern_ended, &self.true_ct(), &a_eq_b),
+                    )
                 })
-                .reduce(|| self.true_ct(), |s, x| self.0.bitand_parallelized(&s, &x))
+                .reduce(|| None, |s, x| self.and_true(s.as_ref(), x.as_ref()))
+                .unwrap_or_else(|| self.false_ct())
         }
     }
 
@@ -802,7 +826,7 @@ impl ServerKey {
         }
         let fst_ended = fst[..fst.len() - 1]
             .iter()
-            .map(|x| self.0.scalar_eq_parallelized(x, 0));
+            .map(|x| Some(self.0.scalar_eq_parallelized(x, 0)));
         let mut result = Vec::with_capacity(fst.len() + snd.len() - 1);
         result.par_extend(fst[..fst.len() - 1].par_iter().cloned());
         result.par_extend(snd.par_iter().cloned());
@@ -811,17 +835,20 @@ impl ServerKey {
             fst_ended
                 .enumerate()
                 .fold(
-                    (result, self.false_ct()),
+                    (result, None),
                     |(mut result, previous_ended), (i, ended)| {
-                        let cond = self.0.bitand_parallelized(
-                            &self.0.bitnot_parallelized(&previous_ended),
-                            &ended,
+                        let cond = self.and_true(
+                            previous_ended
+                                .as_ref()
+                                .map(|x| self.0.bitnot_parallelized(x))
+                                .as_ref(),
+                            ended.as_ref(),
                         );
                         result[i..].par_iter_mut().enumerate().for_each(|(j, x)| {
                             if j < snd.len() {
-                                *x = self.0.if_then_else_parallelized(&cond, &snd[j], x);
+                                *x = self.if_then_else(cond.as_ref(), false, &snd[j], x);
                             } else {
-                                *x = self.0.if_then_else_parallelized(&cond, &self.false_ct(), x);
+                                *x = self.if_then_else(cond.as_ref(), false, &self.false_ct(), x);
                             }
                         });
                         (result, ended)
@@ -832,36 +859,31 @@ impl ServerKey {
     }
 
     #[inline]
-    fn par_ge(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> (FheBool, FheBool) {
+    fn par_ge(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> (Option<FheBool>, FheBool) {
         fst.par_iter()
             .zip(snd.par_iter())
             .map(|(x, y)| {
                 rayon::join(
-                    || self.0.ne_parallelized(x, y),
+                    || Some(self.0.ne_parallelized(x, y)),
                     || self.0.gt_parallelized(x, y),
                 )
             })
             .reduce(
-                || (self.false_ct(), self.true_ct()),
+                || (None, self.true_ct()),
                 |(previous_ne, previous_gt), (current_ne, current_gt)| {
                     rayon::join(
-                        || self.0.bitor_parallelized(&previous_ne, &current_ne),
-                        || self.bool_if_then_else(&previous_ne, &previous_gt, &current_gt),
+                        || self.or(previous_ne.as_ref(), current_ne.as_ref()),
+                        || {
+                            self.if_then_else(
+                                previous_ne.as_ref(),
+                                false,
+                                &previous_gt,
+                                &current_gt,
+                            )
+                        },
                     )
                 },
             )
-    }
-
-    #[inline]
-    fn bool_if_then_else(&self, cond: &FheBool, branch_a: &FheBool, branch_b: &FheBool) -> FheBool {
-        let (take_a, take_b) = rayon::join(
-            || self.0.bitand_parallelized(cond, branch_a),
-            || {
-                self.0
-                    .bitand_parallelized(&self.0.bitnot_parallelized(cond), branch_b)
-            },
-        );
-        self.0.bitor_parallelized(&take_a, &take_b)
     }
 
     /// This method tests greater than or equal to (for `encrypted_str` and `other_encrypted_str`)
@@ -897,35 +919,48 @@ impl ServerKey {
         match fst.len().cmp(&snd.len()) {
             Ordering::Less => {
                 let (any_ne, leftmost_gt) = self.par_ge(fst, &snd[..fst.len()]);
-                self.bool_if_then_else(&any_ne, &leftmost_gt, &self.par_eq_zero(&snd[fst.len()..]))
+
+                self.if_then_else(
+                    any_ne.as_ref(),
+                    false,
+                    &leftmost_gt,
+                    &self.par_eq_zero(&snd[fst.len()..]),
+                )
             }
             Ordering::Equal => {
                 let (any_ne, leftmost_gt) = self.par_ge(fst, snd);
-                self.bool_if_then_else(&any_ne, &leftmost_gt, &self.true_ct())
+                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
             }
             Ordering::Greater => {
                 let (any_ne, leftmost_gt) = self.par_ge(&fst[..snd.len()], snd);
-                self.bool_if_then_else(&any_ne, &leftmost_gt, &self.true_ct())
+                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
             }
         }
     }
 
     #[inline]
-    fn par_le(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> (FheBool, FheBool) {
+    fn par_le(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> (Option<FheBool>, FheBool) {
         fst.par_iter()
             .zip(snd.par_iter())
             .map(|(x, y)| {
                 rayon::join(
-                    || self.0.ne_parallelized(x, y),
+                    || Some(self.0.ne_parallelized(x, y)),
                     || self.0.lt_parallelized(x, y),
                 )
             })
             .reduce(
-                || (self.false_ct(), self.true_ct()),
+                || (None, self.true_ct()),
                 |(previous_ne, previous_lt), (current_ne, current_lt)| {
                     rayon::join(
-                        || self.0.bitor_parallelized(&previous_ne, &current_ne),
-                        || self.bool_if_then_else(&previous_ne, &previous_lt, &current_lt),
+                        || self.or(previous_ne.as_ref(), current_ne.as_ref()),
+                        || {
+                            self.if_then_else(
+                                previous_ne.as_ref(),
+                                false,
+                                &previous_lt,
+                                &current_lt,
+                            )
+                        },
                     )
                 },
             )
@@ -964,15 +999,25 @@ impl ServerKey {
         match fst.len().cmp(&snd.len()) {
             Ordering::Less => {
                 let (any_ne, leftmost_lt) = self.par_le(fst, &snd[..fst.len()]);
-                self.bool_if_then_else(&any_ne, &leftmost_lt, &self.par_eq_zero(&snd[fst.len()..]))
+                self.if_then_else(
+                    any_ne.as_ref(),
+                    false,
+                    &leftmost_lt,
+                    &self.par_eq_zero(&snd[fst.len()..]),
+                )
             }
             Ordering::Equal => {
                 let (any_ne, leftmost_lt) = self.par_le(fst, snd);
-                self.bool_if_then_else(&any_ne, &leftmost_lt, &self.true_ct())
+                self.if_then_else(any_ne.as_ref(), false, &leftmost_lt, &self.true_ct())
             }
             Ordering::Greater => {
                 let (any_ne, leftmost_lt) = self.par_le(&fst[..snd.len()], snd);
-                self.bool_if_then_else(&any_ne, &leftmost_lt, &self.par_eq_zero(&fst[snd.len()..]))
+                self.if_then_else(
+                    any_ne.as_ref(),
+                    false,
+                    &leftmost_lt,
+                    &self.par_eq_zero(&fst[snd.len()..]),
+                )
             }
         }
     }
@@ -981,15 +1026,17 @@ impl ServerKey {
     fn par_ne(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> FheBool {
         fst.par_iter()
             .zip(snd.par_iter())
-            .map(|(x, y)| self.0.ne_parallelized(x, y))
-            .reduce(|| self.false_ct(), |x, y| self.0.bitor_parallelized(&x, &y))
+            .map(|(x, y)| Some(self.0.ne_parallelized(x, y)))
+            .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
+            .unwrap_or_else(|| self.false_ct())
     }
 
     #[inline]
     fn par_ne_zero(&self, fst: &[FheAsciiChar]) -> FheBool {
         fst.par_iter()
-            .map(|x| self.0.scalar_ne_parallelized(x, 0))
-            .reduce(|| self.false_ct(), |x, y| self.0.bitor_parallelized(&x, &y))
+            .map(|x| Some(self.0.scalar_ne_parallelized(x, 0)))
+            .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
+            .unwrap_or_else(|| self.false_ct())
     }
 
     /// This method tests inequality (for `encrypted_str` and `other_encrypted_str`)
@@ -1029,23 +1076,26 @@ impl ServerKey {
     fn par_eq(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> FheBool {
         fst.par_iter()
             .zip(snd.par_iter())
-            .map(|(x, y)| self.0.eq_parallelized(x, y))
-            .reduce(|| self.true_ct(), |x, y| self.0.bitand_parallelized(&x, &y))
+            .map(|(x, y)| Some(self.0.eq_parallelized(x, y)))
+            .reduce(|| None, |x, y| self.and_true(x.as_ref(), y.as_ref()))
+            .unwrap_or_else(|| self.false_ct())
     }
 
     #[inline]
     fn par_eq_clear(&self, fst: &[FheAsciiChar], snd: &str) -> FheBool {
         fst.par_iter()
             .zip(snd.as_bytes().par_iter().chain(rayon::iter::once(&0u8)))
-            .map(|(x, y)| self.0.scalar_eq_parallelized(x, *y))
-            .reduce(|| self.true_ct(), |x, y| self.0.bitand_parallelized(&x, &y))
+            .map(|(x, y)| Some(self.0.scalar_eq_parallelized(x, *y)))
+            .reduce(|| None, |x, y| self.and_true(x.as_ref(), y.as_ref()))
+            .unwrap_or_else(|| self.false_ct())
     }
 
     #[inline]
     fn par_eq_zero(&self, fst: &[FheAsciiChar]) -> FheBool {
         fst.par_iter()
-            .map(|x| self.0.scalar_eq_parallelized(x, 0))
-            .reduce(|| self.true_ct(), |x, y| self.0.bitand_parallelized(&x, &y))
+            .map(|x| Some(self.0.scalar_eq_parallelized(x, 0)))
+            .reduce(|| None, |x, y| self.and_true(x.as_ref(), y.as_ref()))
+            .unwrap_or_else(|| self.true_ct())
     }
 
     /// This method tests equality (for `encrypted_str` and `other_encrypted_str`)
