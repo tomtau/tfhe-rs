@@ -3,6 +3,7 @@ mod trim;
 
 use std::cmp::Ordering;
 
+use dashmap::DashMap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tfhe::integer::ServerKey as IntegerServerKey;
@@ -185,12 +186,17 @@ impl ServerKey {
                 if pat.is_empty() {
                     return self.true_ct();
                 }
-                if pat.len() > encrypted_str.as_ref().len() {
+                let fst = encrypted_str.as_ref();
+                let str_l = fst.len();
+                if pat.len() > str_l {
                     return self.false_ct();
                 }
-                let fst = encrypted_str.as_ref();
-                fst.par_windows(pat.len() + 1)
-                    .map(|window| Some(self.par_eq_clear(window, pat)))
+                let cache = DashMap::new();
+                (0..str_l - pat.len() - 1)
+                    .into_par_iter()
+                    .map(|i| {
+                        Some(self.par_eq_clear_cached(i, &fst[i..i + pat.len() + 1], pat, &cache))
+                    })
                     .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
                     .unwrap_or_else(|| self.false_ct())
             }
@@ -1082,10 +1088,26 @@ impl ServerKey {
     }
 
     #[inline]
-    fn par_eq_clear(&self, fst: &[FheAsciiChar], snd: &str) -> FheBool {
-        fst.par_iter()
+    fn par_eq_clear_cached(
+        &self,
+        start_index: usize,
+        fst: &[FheAsciiChar],
+        snd: &str,
+        cache: &DashMap<(usize, u8), FheBool>,
+    ) -> FheBool {
+        (start_index..start_index + fst.len())
+            .into_par_iter()
+            .zip(fst.par_iter())
             .zip(snd.as_bytes().par_iter().chain(rayon::iter::once(&0u8)))
-            .map(|(x, y)| Some(self.0.scalar_eq_parallelized(x, *y)))
+            .map(|((i, x), y)| {
+                let key = (i, *y);
+                let result = cache.get(&key).map(|v| v.clone()).unwrap_or_else(|| {
+                    let v = self.0.scalar_eq_parallelized(x, *y);
+                    cache.insert(key, v.clone());
+                    v
+                });
+                Some(result)
+            })
             .reduce(|| None, |x, y| self.and_true(x.as_ref(), y.as_ref()))
             .unwrap_or_else(|| self.false_ct())
     }

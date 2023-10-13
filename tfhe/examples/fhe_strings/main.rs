@@ -1,5 +1,6 @@
 mod ciphertext;
 mod client_key;
+mod scan;
 mod server_key;
 
 use std::{
@@ -197,6 +198,57 @@ fn main() -> io::Result<()> {
         let decrypted_concatted = client_key.decrypt_str(&concatted);
         info!("`concat` FHE: {decrypted_concatted} (took {elapsed:?})");
         info!("`concat` std: {}", input_string.to_owned() + pattern);
+
+        let now = Instant::now();
+        let strip_prefix = server_key.strip_prefix(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_strip_prefix_clear = client_key.decrypt_option_str(&strip_prefix);
+        info!("`strip_prefix` FHE: {decrypted_strip_prefix_clear:?} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let strip_prefix = server_key.strip_prefix(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_strip_prefix_encrypted = client_key.decrypt_option_str(&strip_prefix);
+        info!("`strip_prefix` FHE: {decrypted_strip_prefix_encrypted:?} (took {elapsed:?}) (encrypted pattern)");
+        info!(
+            "`strip_prefix` std: {:?}",
+            input_string.strip_prefix(pattern.as_str())
+        );
+
+        let now = Instant::now();
+        let strip_suffix = server_key.strip_suffix(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_strip_suffix_clear = client_key.decrypt_option_str(&strip_suffix);
+        info!("`strip_suffix` FHE: {decrypted_strip_suffix_clear:?} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let strip_suffix = server_key.strip_suffix(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_strip_suffix_encrypted = client_key.decrypt_option_str(&strip_suffix);
+        info!("`strip_suffix` FHE: {decrypted_strip_suffix_encrypted:?} (took {elapsed:?}) (encrypted pattern)");
+        info!(
+            "`strip_suffix` std: {:?}",
+            input_string.strip_suffix(pattern.as_str())
+        );
+
+        let now = Instant::now();
+        let trimmed = server_key.trim(&encrypted_str);
+        let elapsed = now.elapsed();
+        let decrypted_trimmed = client_key.decrypt_str(&trimmed);
+        info!("`trim` FHE: `{decrypted_trimmed}` (took {elapsed:?})");
+        info!("`trim` std: `{}`", input_string.trim());
+
+        let now = Instant::now();
+        let end_trimmed = server_key.trim_end(&encrypted_str);
+        let elapsed = now.elapsed();
+        let decrypted_end_trimmed = client_key.decrypt_str(&end_trimmed);
+        info!("`trim_end` FHE: `{decrypted_end_trimmed}` (took {elapsed:?})");
+        info!("`trim_end` std: `{}`", input_string.trim_end());
+
+        let now = Instant::now();
+        let start_trimmed = server_key.trim_start(&encrypted_str);
+        let elapsed = now.elapsed();
+        let decrypted_start_trimmed = client_key.decrypt_str(&start_trimmed);
+        info!("`trim_start` FHE: `{decrypted_start_trimmed}` (took {elapsed:?})");
+        info!("`trim_start` std: `{}`", input_string.trim_start());
 
         Ok(())
     } else {

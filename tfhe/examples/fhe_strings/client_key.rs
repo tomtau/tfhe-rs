@@ -42,6 +42,14 @@ impl ClientKey {
         }
     }
 
+    pub fn decrypt_option_str(&self, size: &FheOption<FheString>) -> Option<String> {
+        if self.decrypt_bool(&size.0) {
+            Some(self.decrypt_str(&size.1))
+        } else {
+            None
+        }
+    }
+
     pub fn encrypt_str(
         &self,
         s: &str,
