@@ -719,6 +719,9 @@ impl ServerKey {
                     );
                     let cond = self.0.bitand_parallelized(&to_fill, &remaining_pat);
                     for j in 0..to_pat_enc.len() {
+                        if i + j >= result.len() {
+                            break;
+                        }
                         result[i + j] =
                             self.0
                                 .if_then_else_parallelized(&cond, &to_pat_enc[j], &result[i + j]);
