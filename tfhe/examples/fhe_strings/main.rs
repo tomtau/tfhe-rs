@@ -38,8 +38,13 @@ fn main() -> io::Result<()> {
         matches.get_one::<String>("input_string"),
         matches.get_one::<String>("pattern"),
     ) {
+        let input_string2 = matches
+            .get_one::<String>("input_string2")
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| "".to_string());
         info!("input_string: {input_string}");
         info!("pattern  (or the second string for comparisons): {pattern}");
+        info!("input_string2: {input_string2}");
 
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
@@ -53,6 +58,12 @@ fn main() -> io::Result<()> {
             error!("Failed to encrypt input pattern: {e}");
             Error::new(io::ErrorKind::Other, e)
         })?;
+        let encrypted_str2 = client_key
+            .encrypt_str_padded(&input_string2, 2usize.try_into().unwrap())
+            .map_err(|e| {
+                error!("Failed to encrypt input string2: {e}");
+                Error::new(io::ErrorKind::Other, e)
+            })?;
 
         let now = Instant::now();
         let contains = server_key.contains(&encrypted_str, pattern.as_str());
@@ -123,6 +134,25 @@ fn main() -> io::Result<()> {
         let decrypted_len = client_key.decrypt_usize(&len);
         info!("`len` FHE: {decrypted_len} (took {elapsed:?})");
         info!("`len` std: {}", input_string.len());
+
+        let now = Instant::now();
+        let replace_clear =
+            server_key.replace(&encrypted_str, pattern.as_str(), input_string2.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_replace_clear = client_key.decrypt_str(&replace_clear);
+        info!("`replace` FHE: {decrypted_replace_clear} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let replace_encrypted =
+            server_key.replace(&encrypted_str, &encrypted_pattern, &encrypted_str2);
+        let elapsed = now.elapsed();
+        let decrypted_replace_encrypted = client_key.decrypt_str(&replace_encrypted);
+        info!(
+            "`replace` FHE: {decrypted_replace_encrypted} (took {elapsed:?}) (encrypted pattern)"
+        );
+        info!(
+            "`replace` std: {}",
+            input_string.replace(pattern, input_string2.as_str())
+        );
 
         let now = Instant::now();
         let rfind = server_key.rfind(&encrypted_str, pattern.as_str());
@@ -249,6 +279,21 @@ fn main() -> io::Result<()> {
         let decrypted_start_trimmed = client_key.decrypt_str(&start_trimmed);
         info!("`trim_start` FHE: `{decrypted_start_trimmed}` (took {elapsed:?})");
         info!("`trim_start` std: `{}`", input_string.trim_start());
+
+        let now = Instant::now();
+        let split = server_key.split(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_split_clear = client_key.decrypt_split(split);
+        info!("`split` FHE: {decrypted_split_clear:?} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let split = server_key.split(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_split_encrypted = client_key.decrypt_split(split);
+        info!("`split` FHE: {decrypted_split_encrypted:?} (took {elapsed:?}) (encrypted pattern)");
+        info!(
+            "`split` std: {:?}",
+            input_string.split(pattern).collect::<Vec<_>>()
+        );
 
         Ok(())
     } else {

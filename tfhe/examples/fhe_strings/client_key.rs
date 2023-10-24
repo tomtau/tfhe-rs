@@ -6,7 +6,10 @@ use tfhe::{
     shortint::ShortintParameterSet,
 };
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize};
+use crate::{
+    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize},
+    server_key::FheSplit,
+};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ClientKey(IntegerClientKey);
@@ -48,6 +51,31 @@ impl ClientKey {
         } else {
             None
         }
+    }
+
+    pub fn decrypt_split(&self, split: FheSplit) -> Vec<String> {
+        let mut result = Vec::new();
+        for split_item in split {
+            if let Some(b) = split_item.valid_split {
+                if !self.decrypt_bool(&b) {
+                    continue;
+                }
+                for s in split_item.split_sequence {
+                    if let Some(s) = self.decrypt_option_str(&s) {
+                        result.push(s);
+                    }
+                }
+                return result;
+            } else {
+                for s in split_item.split_sequence {
+                    if let Some(s) = self.decrypt_option_str(&s) {
+                        result.push(s);
+                    }
+                }
+                return result;
+            }
+        }
+        result
     }
 
     pub fn encrypt_str(

@@ -84,7 +84,6 @@ impl ServerKey {
                     (starts_with, FheString::new_unchecked(result))
                 }
             }
-            // FIXME: this is not working
             Pattern::Encrypted(pat) => {
                 let pat_ref = pat.as_ref();
                 let pat_l = pat_ref.len();
@@ -120,13 +119,14 @@ impl ServerKey {
                         .map(|x| self.0.bitand_parallelized(&starts_with, &x))
                         .collect();
                     let mut result = Vec::with_capacity(str_l);
+                    let zero = self.false_ct();
                     result.par_extend((0..str_l - 1).into_par_iter().map(|i| {
                         let window = &enc_ref[i..std::cmp::min(i + pat_l + 1, str_l - 1)];
 
                         let mut c = window[0].clone();
                         // TODO: can this be parallelized?
                         for j in 1..window.len() {
-                            let c_to_move = &window[j];
+                            let c_to_move = if i + pat_l < str_l { &window[j] } else { &zero };
                             // move starts_with and if pattern is not ended at j - 1
                             c = self.0.if_then_else_parallelized(
                                 &pattern_not_ended[j - 1],
@@ -431,7 +431,7 @@ impl ServerKey {
                         .if_then_else_parallelized(&boundary_not_hit, &count_xy, &count_x);
                 (boundary_not_hit, next_count)
             },
-            (starts_with_ws.clone(), self.true_ct()),
+            (starts_with_ws.clone(), starts_with_ws.clone()),
         )
         .map(|(_, count)| count)
         .collect();
@@ -446,7 +446,6 @@ impl ServerKey {
             .collect();
 
         let mut result = Vec::with_capacity(fst.len());
-        // FIXME
         result.par_extend((0..str_l).into_par_iter().map(|i| {
             (i..shifted_indices.len())
                 .into_par_iter()
