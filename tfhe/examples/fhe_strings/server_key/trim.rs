@@ -120,8 +120,8 @@ impl ServerKey {
                         .collect();
                     let mut result = Vec::with_capacity(str_l);
                     let zero = self.false_ct();
-                    result.par_extend((0..str_l - 1).into_par_iter().map(|i| {
-                        let window = &enc_ref[i..std::cmp::min(i + pat_l + 1, str_l - 1)];
+                    result.par_extend((0..str_l).into_par_iter().map(|i| {
+                        let window = &enc_ref[i..std::cmp::min(i + pat_l + 1, str_l)];
 
                         let mut c = window[0].clone();
                         // TODO: can this be parallelized?
@@ -160,15 +160,15 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let barfoo = client_key.encrypt_str("bar:foo").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&barfoo, ":foo")), Some("bar".to_string()));
+    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, ":foo")), Some("bar".to_string()));
     /// let foo = client_key.encrypt_str("foo").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&barfoo, &foo)), Some("bar:".to_string()));
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&barfoo, "bar")), None);
+    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, &foo)), Some("bar:".to_string()));
+    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, "bar")), None);
     /// let bar = client_key.encrypt_str("bar").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&barfoo, &bar)), None);
+    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, &bar)), None);
     /// let foofoo = client_key.encrypt_str("foofoo").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&foofoo, "foo")), Some("foo".to_string()));
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&foofoo, &foo)), Some("foo".to_string()));
+    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&foofoo, "foo")), Some("foo".to_string()));
+    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&foofoo, &foo)), Some("foo".to_string()));
     /// ```
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
@@ -191,10 +191,15 @@ impl ServerKey {
                     return (self.false_ct(), encrypted_str.clone());
                 }
                 let cache = DashMap::new();
-                let suffix_found = (0..str_l - pat.len() - 1)
+                let suffix_found = (0..str_l - pat.len())
                     .into_par_iter()
                     .map(|i| {
-                        Some(self.par_eq_clear_cached(i, &fst[i..i + pat.len() + 1], pat, &cache))
+                        Some(self.par_eq_clear_cached(
+                            i,
+                            &fst[i..std::cmp::min(i + pat.len() + 1, str_l)],
+                            pat,
+                            &cache,
+                        ))
                     })
                     .chain(rayon::iter::repeatn(None, pat.len()));
                 let clear_mask: Vec<_> =

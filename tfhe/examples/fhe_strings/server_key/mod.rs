@@ -169,12 +169,12 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let bananas = client_key.encrypt_str("bananas").unwrap();
-    /// assert!(client_key.decrypt_bool(&server_key.starts_with(&bananas, "anas")));
+    /// assert!(client_key.decrypt_bool(&server_key.ends_with(&bananas, "anas")));
     /// let anas = client_key.encrypt_str("anas").unwrap();
-    /// assert!(client_key.decrypt_bool(&server_key.starts_with(&bananas, &anas)));
-    /// assert!(!client_key.decrypt_bool(&server_key.starts_with(&bananas, "nana")));
+    /// assert!(client_key.decrypt_bool(&server_key.ends_with(&bananas, &anas)));
+    /// assert!(!client_key.decrypt_bool(&server_key.ends_with(&bananas, "nana")));
     /// let nana = client_key.encrypt_str("nana").unwrap();
-    /// assert!(!client_key.decrypt_bool(&server_key.starts_with(&bananas, &nana)));
+    /// assert!(!client_key.decrypt_bool(&server_key.ends_with(&bananas, &nana)));
     /// ```
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
@@ -195,10 +195,15 @@ impl ServerKey {
                     return self.false_ct();
                 }
                 let cache = DashMap::new();
-                (0..str_l - pat.len() - 1)
+                (0..str_l - pat.len())
                     .into_par_iter()
                     .map(|i| {
-                        Some(self.par_eq_clear_cached(i, &fst[i..i + pat.len() + 1], pat, &cache))
+                        Some(self.par_eq_clear_cached(
+                            i,
+                            &fst[i..std::cmp::min(i + pat.len() + 1, str_l)],
+                            pat,
+                            &cache,
+                        ))
                     })
                     .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
                     .unwrap_or_else(|| self.false_ct())
@@ -563,7 +568,6 @@ impl ServerKey {
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
-
     #[must_use = "this returns the replaced FheString as a new allocation, \
                   without modifying the original"]
     #[inline]
@@ -651,7 +655,8 @@ impl ServerKey {
                             .create_trivial_radix::<u64, FheAsciiChar>(*x as u64, NUM_BLOCKS)
                     })
                     .collect();
-                let pattern_starts = str_ref.par_windows(from_pat.len()).map(|window| {
+                let pattern_starts = (0..str_ref.len()).into_par_iter().map(|i| {
+                    let window = &str_ref[i..std::cmp::min(str_ref.len(), i + from_pat.len())];
                     let starts = self.starts_with_clear_par(window, from_pat);
                     Some((
                         self.0
@@ -682,7 +687,6 @@ impl ServerKey {
                 )
                 .flatten()
                 .collect();
-
                 let mut pattern_found_count = accumulated_starts
                     .last()
                     .cloned()
@@ -706,7 +710,6 @@ impl ServerKey {
                         }
                     })
                     .collect::<Vec<_>>();
-
                 result.par_extend(
                     (0..max_len)
                         .into_par_iter()
