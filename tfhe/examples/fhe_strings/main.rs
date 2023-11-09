@@ -303,6 +303,21 @@ fn main() -> io::Result<()> {
             input_string.split(pattern).collect::<Vec<_>>()
         );
 
+        let now = Instant::now();
+        let split_inclusive = server_key.split_inclusive(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_split_inclusive_clear = client_key.decrypt_split(split_inclusive);
+        info!("`split_inclusive` FHE: {decrypted_split_inclusive_clear:?} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let split_inclusive = server_key.split_inclusive(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_split_inclusive_encrypted = client_key.decrypt_split(split_inclusive);
+        info!("`split_inclusive` FHE: {decrypted_split_inclusive_encrypted:?} (took {elapsed:?}) (encrypted pattern)");
+        info!(
+            "`split_inclusive` std: {:?}",
+            input_string.split_inclusive(pattern).collect::<Vec<_>>()
+        );
+
         Ok(())
     } else {
         error!("Missing required arguments");

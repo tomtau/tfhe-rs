@@ -8,7 +8,7 @@ use tfhe::{
 
 use crate::{
     ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize},
-    server_key::FheSplit,
+    server_key::{FhePatternLen, FheSplitResult},
 };
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -53,28 +53,44 @@ impl ClientKey {
         }
     }
 
-    pub fn decrypt_split(&self, split: FheSplit) -> Vec<String> {
+    pub fn decrypt_split(&self, split: FheSplitResult) -> Vec<String> {
+        let include_empty = split.include_empty_matches().map(|x| match x {
+            FhePatternLen::Plain(y) => *y,
+            FhePatternLen::Encrypted(y) => self.decrypt_usize(y),
+        });
+
         let mut result = Vec::new();
-        for split_item in split {
-            if let Some(b) = split_item.valid_split {
-                if !self.decrypt_bool(&b) {
-                    continue;
+        let mut current = "".to_string();
+        let mut last_found = false;
+        let mut split_iter = split.into_iter().enumerate();
+        while let Some((i, (found, char))) = split_iter.next() {
+            let char: u64 = self.0.decrypt_radix(&char);
+            let found_dec = self.decrypt_bool(&found);
+            last_found = found_dec || (char == 0 && last_found);
+
+            if found_dec {
+                if char != 0 {
+                    current.push(char as u8 as char);
                 }
-                for s in split_item.split_sequence {
-                    if let Some(s) = self.decrypt_option_str(&s) {
-                        result.push(s);
+                if !current.is_empty() || include_empty.is_some() || i == 0 {
+                    result.push(current.clone());
+                    current = "".to_string();
+                }
+                if let Some(l) = include_empty {
+                    for _ in 0..l.saturating_sub(1) {
+                        let _ = split_iter.next();
                     }
                 }
-                return result;
-            } else {
-                for s in split_item.split_sequence {
-                    if let Some(s) = self.decrypt_option_str(&s) {
-                        result.push(s);
-                    }
-                }
-                return result;
+            } else if char != 0 {
+                current.push(char as u8 as char);
             }
         }
+        if ((last_found || result.is_empty()) && matches!(include_empty, Some(l) if l > 0))
+            || !current.is_empty()
+        {
+            result.push(current);
+        }
+
         result
     }
 

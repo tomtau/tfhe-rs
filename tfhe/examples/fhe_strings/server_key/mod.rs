@@ -1,7 +1,7 @@
 mod split;
 mod trim;
 
-pub use split::{FheSplit, FheSplitItem};
+pub use split::{FhePatternLen, FheSplitResult};
 
 use std::cmp::Ordering;
 

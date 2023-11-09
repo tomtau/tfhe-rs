@@ -1,10 +1,11 @@
-use std::marker::PhantomData;
+use std::{collections::VecDeque, marker::PhantomData};
 
-use rayon::prelude::{
-    IntoParallelIterator, IntoParallelRefIterator, ParallelExtend, ParallelIterator,
+use rayon::prelude::*;
+
+use crate::{
+    ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Pattern},
+    scan::scan,
 };
-
-use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, Pattern};
 
 use super::ServerKey;
 
@@ -12,45 +13,49 @@ pub struct RSplit<'a>(PhantomData<&'a ()>);
 pub struct RSplitN<'a>(PhantomData<&'a ()>);
 pub struct RSplitTerminator<'a>(PhantomData<&'a ()>);
 
-/// One of possible results of FHE splitting a string.
-/// It has two encrypted components:
-/// 1. `valid_split` which indicates whether the split is valid:
-/// - None: valid, but the pattern was not found in the string
-/// - Some(encrypted false/0): invalid, we skip processing/decrypting the rest of this result
-/// - Some(encrypted true/1): valid
-///
-/// In `FheSplit`, the rightmost / the first valid returned string is the result of the split.
-/// 2. `split_sequence` which is a sequence of encrypted strings. We decrypt if valid_split` is valid.
-/// Each element of the sequence is either:
-/// - encrypted None/0: we skip it (it's to account for splitting at 0-padded positions which don't occur in normal Rust std splits)
-/// - encrypted Some: we decrypt it and include it
-#[derive(Clone)]
-pub struct FheSplitItem {
-    /// None == pattern not found / no split done
-    pub valid_split: Option<FheBool>,
-    /// result of the split: encrypted Some if a valid string,
-    /// encrypted None if not a valid string that shouldn't be included in results
-    pub split_sequence: Vec<FheOption<FheString>>,
+/// The pattern length used for interpreting [`FheSplitResult`]
+pub enum FhePatternLen {
+    Plain(usize),
+    Encrypted(FheUsize),
 }
 
-/// The iterator over the possible results of FHE splitting a string.
-/// Unlike the Rust standard library's `Split` iterator, it is not lazy over string subslices, i.e.
-/// it computes eagerly and returns all collected possible splits.
-/// The way to process it is using [`ClientKey`]'s `decrypt_split` method, which will take the first/rightmost
-/// valid [`FheSplitItem`] and decrypt it into a vector of strings
-/// (which produces an equivalent result to calling the Rust standard library's split and collect methods).
-pub struct FheSplit(Vec<FheSplitItem>);
+type SplitFoundPattern = VecDeque<(FheBool, FheAsciiChar)>;
 
-impl Iterator for FheSplit {
-    type Item = FheSplitItem;
+/// The iterator over the results of FHE splitting a string.
+/// Unlike the Rust standard library's `Split` iterator, it is not lazy over string subslices, i.e.
+/// it computes eagerly and returns all collected splits.
+/// The way to process it is using [`ClientKey`]'s `decrypt_split` method
+/// (which produces an equivalent result to calling the Rust standard library's split and collect methods).
+pub enum FheSplitResult {
+    Split(FhePatternLen, SplitFoundPattern),
+    SplitInclusive(SplitFoundPattern),
+}
+
+impl FheSplitResult {
+    /// If the Split option should include "empty" matches, then this returns the pattern
+    /// length, so that  [`ClientKey`]'s `decrypt_split` method knows how many zeroed-out characters
+    /// correspond to the patterns vs the actual padded string length
+    pub fn include_empty_matches(&self) -> Option<&FhePatternLen> {
+        match self {
+            FheSplitResult::Split(p, _) => Some(p),
+            _ => None,
+        }
+    }
+}
+
+impl Iterator for FheSplitResult {
+    type Item = (FheBool, FheAsciiChar);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.pop()
+        match self {
+            FheSplitResult::Split(_, x) => x.pop_front(),
+            FheSplitResult::SplitInclusive(x) => x.pop_front(),
+            _ => None,
+        }
     }
 }
 
 pub struct SplitAsciiWhitespace<'a>(PhantomData<&'a ()>);
-pub struct SplitInclusive<'a>(PhantomData<&'a ()>);
 pub struct SplitTerminator<'a>(PhantomData<&'a ()>);
 pub struct SplitN<'a>(PhantomData<&'a ()>);
 
@@ -224,28 +229,6 @@ impl ServerKey {
         todo!()
     }
 
-    #[inline]
-    fn empty_pattern_split_item(&self, valid: FheBool, str_ref: &[FheAsciiChar]) -> FheSplitItem {
-        let zero = self.false_ct();
-        let empty = FheString::new_unchecked(vec![zero.clone()]);
-
-        let mut split_sequence = Vec::with_capacity(str_ref.len());
-        let separator = (self.true_ct(), empty);
-        split_sequence.push(separator.clone());
-        split_sequence.par_extend(str_ref[..str_ref.len() - 1].par_iter().map(|c| {
-            (
-                self.0.scalar_ne_parallelized(c, 0),
-                FheString::new_unchecked(vec![c.clone(), zero.clone()]),
-            )
-        }));
-        split_sequence.push(separator);
-        let split_item = FheSplitItem {
-            valid_split: Some(valid),
-            split_sequence,
-        };
-        split_item
-    }
-
     /// An iterator over possible results of encrypted substrings of `encrypted_str`,
     /// separated by characters matched by a pattern.
     ///
@@ -383,178 +366,140 @@ impl ServerKey {
     ///
     /// [`split_whitespace`]: ServerKey::split_whitespace
     #[inline]
-    pub fn split<'a, P: Into<Pattern<'a>>>(&self, encrypted_str: &FheString, pat: P) -> FheSplit {
+    pub fn split<'a, P: Into<Pattern<'a>>>(
+        &self,
+        encrypted_str: &FheString,
+        pat: P,
+    ) -> FheSplitResult {
         let str_ref = encrypted_str.as_ref();
-        let zero = self.false_ct();
-        let empty = FheString::new_unchecked(vec![zero.clone()]);
-
+        let str_len = str_ref.len();
         match pat.into() {
-            Pattern::Clear(pat) if pat.is_empty() => {
-                FheSplit(vec![self.empty_pattern_split_item(self.true_ct(), str_ref)])
+            Pattern::Clear(p) if p.is_empty() => {
+                let zero = self.false_ct();
+                let one = self.true_ct();
+                let mut split_sequence = VecDeque::new();
+                split_sequence.push_back((one.clone(), zero.clone()));
+                split_sequence.par_extend(
+                    str_ref
+                        .par_iter()
+                        .map(|x| (self.0.scalar_ne_parallelized(x, 0), x.clone())),
+                );
+                split_sequence.push_back((one.clone(), zero));
+
+                FheSplitResult::Split(FhePatternLen::Plain(0), split_sequence)
+            }
+            Pattern::Clear(p) if p.len() > str_ref.len() => {
+                let zero = self.false_ct();
+                FheSplitResult::Split(
+                    FhePatternLen::Plain(p.len()),
+                    str_ref
+                        .par_iter()
+                        .map(|x| (zero.clone(), x.clone()))
+                        .collect(),
+                )
             }
             Pattern::Clear(pat) => {
-                let str_len = str_ref.len();
-                let pat_len = pat.len();
-                let mut possible_splits: Vec<(usize, FheSplitItem)> = vec![(
-                    0,
-                    FheSplitItem {
-                        valid_split: None,
-                        split_sequence: vec![],
-                    },
-                )];
-                let (found_patterns, empty_split): (Vec<_>, FheSplitItem) = rayon::join(
-                    || {
-                        (0..str_len - 1)
-                            .into_par_iter()
-                            .map(|i| self.starts_with_clear_par(&str_ref[i..], pat))
-                            .collect()
-                    },
-                    || {
-                        let empty_str = self.is_empty(&encrypted_str);
-                        FheSplitItem {
-                            valid_split: Some(empty_str.clone()),
-                            split_sequence: vec![(empty_str, empty)],
+                let zero = self.false_ct();
+                let mut split_sequence = VecDeque::new();
+                let pattern_starts = (0..str_len).into_par_iter().map(|i| {
+                    let starts = self.starts_with_clear_par(&str_ref[i..], pat);
+                    Some(self.0.scalar_mul_parallelized(&starts, pat.len() as u64))
+                });
+                let accumulated_starts = scan(
+                    pattern_starts,
+                    |x, y| match (x, y) {
+                        (Some(start_x), Some(start_y)) => {
+                            let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
+                            let next_start = self.0.if_then_else_parallelized(
+                                &in_pattern,
+                                &self.0.scalar_sub_parallelized(start_x, 1),
+                                &start_y,
+                            );
+                            Some(next_start)
                         }
+                        (None, y) => y.clone(),
+                        (x, None) => x.clone(),
                     },
-                );
-                let mut i = 0;
-                while i < str_len - 1 {
-                    let n = possible_splits.len();
-                    let new_items: Vec<_> = (0..n)
-                        .into_par_iter()
-                        .filter_map(|j| {
-                            let start = possible_splits[j].0;
-                            if start <= i {
-                                let mut new_sub_result = (start, possible_splits[j].1.clone());
-                                let pattern_found = &found_patterns[i];
-                                let mut str_v = str_ref[start..i].to_vec();
-                                str_v.push(zero.clone());
-                                new_sub_result.1.valid_split = self.and_true(
-                                    new_sub_result.1.valid_split.as_ref(),
-                                    Some(&pattern_found),
-                                );
-                                new_sub_result
-                                    .1
-                                    .split_sequence
-                                    .push((pattern_found.clone(), FheString::new_unchecked(str_v)));
-                                new_sub_result.0 = i + pat_len;
-
-                                Some(new_sub_result)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    possible_splits.par_extend(new_items);
-                    i += 1;
-                }
-                FheSplit(
-                    possible_splits
-                        .into_par_iter()
-                        .map(|mut sub_result| {
-                            let start = sub_result.0;
-                            if start < str_len {
-                                let mut str_v = str_ref[start..].to_vec();
-                                str_v.push(zero.clone());
-                                let zero_str = self.or(
-                                    Some(&self.0.scalar_ne_parallelized(&str_ref[start], 0)),
-                                    sub_result.1.split_sequence.last().map(|x| &x.0),
-                                );
-                                sub_result.1.split_sequence.push((
-                                    zero_str.expect("zero comparison"),
-                                    FheString::new_unchecked(str_v),
-                                ));
-                            }
-                            sub_result.1
-                        })
-                        .chain(rayon::iter::once(empty_split))
-                        .collect(),
+                    None,
                 )
+                .filter_map(|x| {
+                    x.map(|y| {
+                        (
+                            self.0.scalar_eq_parallelized(&y, pat.len() as u64),
+                            self.0.scalar_gt_parallelized(&y, 0u64),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+                split_sequence.par_extend(
+                    accumulated_starts
+                        .into_par_iter()
+                        .zip(str_ref.into_par_iter())
+                        .map(|((starts, in_pattern), c)| {
+                            (
+                                starts,
+                                self.0.if_then_else_parallelized(&in_pattern, &zero, c),
+                            )
+                        }),
+                );
+                FheSplitResult::Split(FhePatternLen::Plain(pat.len()), split_sequence)
             }
             Pattern::Encrypted(pat) => {
-                let str_len = str_ref.len();
+                let zero = self.false_ct();
+                let (is_empty, orig_len) = rayon::join(|| self.is_empty(pat), || self.len(pat));
+                let mut split_sequence = VecDeque::new();
+                split_sequence.push_back((is_empty.clone(), zero.clone()));
                 let pat_ref = pat.as_ref();
-                let mut possible_splits: Vec<(usize, FheSplitItem)> = vec![(
-                    0,
-                    FheSplitItem {
-                        valid_split: None,
-                        split_sequence: vec![],
-                    },
-                )];
-                let ((found_patterns, empty_split), empty_pattern_split) = rayon::join(
-                    || {
-                        rayon::join(
-                            || {
-                                (0..str_len - 1)
-                                    .into_par_iter()
-                                    .map(|i| self.starts_with_encrypted_par(&str_ref[i..], pat_ref))
-                                    .collect::<Vec<_>>()
-                            },
-                            || {
-                                let empty_str = self.is_empty(&encrypted_str);
-                                FheSplitItem {
-                                    valid_split: Some(empty_str.clone()),
-                                    split_sequence: vec![(empty_str, empty)],
-                                }
-                            },
-                        )
-                    },
-                    || self.empty_pattern_split_item(self.is_empty(pat), str_ref),
+                let (pat_len, is_not_empty) = rayon::join(
+                    || self.0.max_parallelized(&orig_len, &is_empty),
+                    || self.0.bitnot_parallelized(&is_empty),
                 );
-                let mut i = 0;
-                while i < str_len - 1 {
-                    let n = possible_splits.len();
-                    let new_items: Vec<_> = (0..n)
-                        .into_par_iter()
-                        .filter_map(|j| {
-                            let start = possible_splits[j].0;
-                            if start <= i {
-                                let mut new_sub_result = (start, possible_splits[j].1.clone());
-                                let pattern_found = &found_patterns[i];
-                                let mut str_v = str_ref[start..i].to_vec();
-                                str_v.push(zero.clone());
-                                new_sub_result.1.valid_split = self.and_true(
-                                    new_sub_result.1.valid_split.as_ref(),
-                                    Some(&pattern_found),
-                                );
-                                new_sub_result
-                                    .1
-                                    .split_sequence
-                                    .push((pattern_found.clone(), FheString::new_unchecked(str_v)));
-                                new_sub_result.0 = i + 1;
+                let pattern_starts = (0..str_len).into_par_iter().map(|i| {
+                    let starts = self.starts_with_encrypted_par(&str_ref[i..], pat_ref);
+                    Some(self.0.mul_parallelized(&starts, &pat_len))
+                });
 
-                                Some(new_sub_result)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    possible_splits.par_extend(new_items);
-                    i += 1;
-                }
-                FheSplit(
-                    possible_splits
-                        .into_par_iter()
-                        .map(|mut sub_result| {
-                            let start = sub_result.0;
-                            if start < str_len {
-                                let mut str_v = str_ref[start..].to_vec();
-                                str_v.push(zero.clone());
-                                let zero_str = self.or(
-                                    Some(&self.0.scalar_ne_parallelized(&str_ref[start], 0)),
-                                    sub_result.1.split_sequence.last().map(|x| &x.0),
-                                );
-                                sub_result.1.split_sequence.push((
-                                    zero_str.expect("zero comparison"),
-                                    FheString::new_unchecked(str_v),
-                                ));
-                            }
-                            sub_result.1
-                        })
-                        .chain(rayon::iter::once(empty_split))
-                        .chain(rayon::iter::once(empty_pattern_split))
-                        .collect(),
+                let accumulated_starts: Vec<_> = scan(
+                    pattern_starts,
+                    |x, y| match (x, y) {
+                        (Some(start_x), Some(start_y)) => {
+                            let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
+                            let next_start = self.0.if_then_else_parallelized(
+                                &in_pattern,
+                                &self.0.scalar_sub_parallelized(start_x, 1),
+                                &start_y,
+                            );
+                            Some(next_start)
+                        }
+                        (None, y) => y.clone(),
+                        (x, None) => x.clone(),
+                    },
+                    None,
                 )
+                .filter_map(|x| {
+                    x.map(|y| {
+                        (
+                            self.0.eq_parallelized(&y, &pat_len),
+                            self.0.bitand_parallelized(
+                                &self.0.scalar_gt_parallelized(&y, 0u64),
+                                &is_not_empty,
+                            ),
+                        )
+                    })
+                })
+                .collect();
+                split_sequence.par_extend(
+                    accumulated_starts
+                        .into_par_iter()
+                        .zip(str_ref.into_par_iter())
+                        .map(|((starts, in_pattern), c)| {
+                            (
+                                starts,
+                                self.0.if_then_else_parallelized(&in_pattern, &zero, c),
+                            )
+                        }),
+                );
+                FheSplitResult::Split(FhePatternLen::Encrypted(orig_len), split_sequence)
             }
         }
     }
@@ -636,12 +581,105 @@ impl ServerKey {
     /// assert_eq!(v, ["Mary had a little lamb\n", "little lamb\n", "little lamb.\n"]);
     /// ```
     #[inline]
-    pub fn split_inclusive<'a>(
+    pub fn split_inclusive<'a, P: Into<Pattern<'a>>>(
         &self,
         encrypted_str: &FheString,
-        pat: Pattern<'a>,
-    ) -> SplitInclusive<'a> {
-        todo!()
+        pat: P,
+    ) -> FheSplitResult {
+        let str_ref = encrypted_str.as_ref();
+        let str_len = str_ref.len();
+        match pat.into() {
+            Pattern::Clear(p) if p.is_empty() => {
+                let zero = self.false_ct();
+                let one = self.true_ct();
+                let mut split_sequence = VecDeque::new();
+                split_sequence.push_back((one.clone(), zero));
+                split_sequence.par_extend(
+                    str_ref
+                        .par_iter()
+                        .map(|x| (self.0.scalar_ne_parallelized(x, 0), x.clone())),
+                );
+                FheSplitResult::SplitInclusive(split_sequence)
+            }
+            Pattern::Clear(p) if p.len() > str_ref.len() => {
+                let zero = self.false_ct();
+                FheSplitResult::SplitInclusive(
+                    str_ref
+                        .par_iter()
+                        .map(|x| (zero.clone(), x.clone()))
+                        .collect(),
+                )
+            }
+            Pattern::Clear(pat) => {
+                let pattern_starts = (0..str_len).into_par_iter().map(|i| {
+                    let starts = self.starts_with_clear_par(&str_ref[i..], pat);
+                    Some(self.0.scalar_mul_parallelized(&starts, pat.len() as u64))
+                });
+                let accumulated_starts = scan(
+                    pattern_starts,
+                    |x, y| match (x, y) {
+                        (Some(start_x), Some(start_y)) => {
+                            let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
+                            let next_start = self.0.if_then_else_parallelized(
+                                &in_pattern,
+                                &self.0.scalar_sub_parallelized(start_x, 1),
+                                &start_y,
+                            );
+                            Some(next_start)
+                        }
+                        (None, y) => y.clone(),
+                        (x, None) => x.clone(),
+                    },
+                    None,
+                )
+                .filter_map(|x| x.map(|y| self.0.scalar_eq_parallelized(&y, 1)))
+                .collect::<Vec<_>>();
+                FheSplitResult::SplitInclusive(
+                    accumulated_starts
+                        .into_par_iter()
+                        .zip(str_ref.into_par_iter().cloned())
+                        .collect(),
+                )
+            }
+            Pattern::Encrypted(pat) => {
+                let zero = self.false_ct();
+                let is_empty = self.is_empty(pat);
+                let mut split_sequence = VecDeque::new();
+                split_sequence.push_back((is_empty.clone(), zero));
+                let pat_ref = pat.as_ref();
+                let pat_len = self.0.max_parallelized(&self.len(pat), &is_empty);
+                let pattern_starts = (0..str_len).into_par_iter().map(|i| {
+                    let starts = self.starts_with_encrypted_par(&str_ref[i..], pat_ref);
+                    Some(self.0.mul_parallelized(&starts, &pat_len))
+                });
+
+                let accumulated_starts: Vec<_> = scan(
+                    pattern_starts,
+                    |x, y| match (x, y) {
+                        (Some(start_x), Some(start_y)) => {
+                            let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
+                            let next_start = self.0.if_then_else_parallelized(
+                                &in_pattern,
+                                &self.0.scalar_sub_parallelized(start_x, 1),
+                                &start_y,
+                            );
+                            Some(next_start)
+                        }
+                        (None, y) => y.clone(),
+                        (x, None) => x.clone(),
+                    },
+                    None,
+                )
+                .filter_map(|x| x.map(|y| self.0.scalar_eq_parallelized(&y, 1)))
+                .collect();
+                split_sequence.par_extend(
+                    accumulated_starts
+                        .into_par_iter()
+                        .zip(str_ref.into_par_iter().cloned()),
+                );
+                FheSplitResult::SplitInclusive(split_sequence)
+            }
+        }
     }
 
     /// An iterator over substrings of the given string slice, separated by
