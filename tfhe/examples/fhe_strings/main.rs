@@ -40,6 +40,24 @@ fn main() -> io::Result<()> {
                 .required(false)
                 .help("The second string to use in some string operations")
                 .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("number")
+                .short('n')
+                .long("number")
+                .required(false)
+                .value_parser(clap::value_parser!(usize))
+                .help("The number to use in some string operations")
+                .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("skip_encrypted_number")
+                .short('e')
+                .long("skip-encrypted-number")
+                .required(false)
+                .value_parser(clap::value_parser!(bool))
+                .help("Skip the operations with the encrypted number (to save time)")
+                .action(ArgAction::Set),
         );
     let matches = command.get_matches();
     if let (Some(input_string), Some(pattern)) = (
@@ -50,9 +68,19 @@ fn main() -> io::Result<()> {
             .get_one::<String>("input_string2")
             .map(|s| s.to_owned())
             .unwrap_or_else(|| "".to_string());
+        let n = matches
+            .get_one::<usize>("number")
+            .map(|n| *n)
+            .unwrap_or_else(|| 2);
+        let skip_n = matches
+            .get_one::<bool>("skip_encrypted_number")
+            .map(|n| *n)
+            .unwrap_or_else(|| true);
         info!("input_string: {input_string}");
         info!("pattern  (or the second string for comparisons): {pattern}");
         info!("input_string2: {input_string2}");
+        info!("number: {n}");
+        info!("skip_encrypted_number: {skip_n}");
 
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
@@ -72,6 +100,7 @@ fn main() -> io::Result<()> {
                 error!("Failed to encrypt input string2: {e}");
                 Error::new(io::ErrorKind::Other, e)
             })?;
+        let encrypted_n = client_key.encrypt_usize(n);
 
         let now = Instant::now();
         let contains = server_key.contains(&encrypted_str, pattern.as_str());
@@ -142,6 +171,22 @@ fn main() -> io::Result<()> {
         let decrypted_len = client_key.decrypt_usize(&len);
         info!("`len` FHE: {decrypted_len} (took {elapsed:?})");
         info!("`len` std: {}", input_string.len());
+
+        let now = Instant::now();
+        let repeat = server_key.repeat(&encrypted_str, n);
+        let elapsed = now.elapsed();
+        let decrypted_repeat_clear = client_key.decrypt_str(&repeat);
+        info!("`repeat` FHE: {decrypted_repeat_clear} (took {elapsed:?}) (clear number)");
+        if !skip_n {
+            let now = Instant::now();
+            let repeat = server_key.repeat(&encrypted_str, encrypted_n);
+            let elapsed = now.elapsed();
+            let decrypted_repeat_encrypted = client_key.decrypt_str(&repeat);
+            info!(
+                "`repeat` FHE: {decrypted_repeat_encrypted} (took {elapsed:?}) (encrypted number)"
+            );
+        }
+        info!("`repeat` std: {}", input_string.repeat(n));
 
         let now = Instant::now();
         let replace_clear =

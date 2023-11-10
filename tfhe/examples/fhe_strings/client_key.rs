@@ -29,6 +29,10 @@ impl ClientKey {
         self.0.encrypt_radix(byte as u64, NUM_BLOCKS)
     }
 
+    pub fn encrypt_usize(&self, size: usize) -> FheUsize {
+        self.0.encrypt_radix(size as u64, NUM_BLOCKS)
+    }
+
     pub fn decrypt_bool(&self, byte: &FheBool) -> bool {
         self.0.decrypt_radix::<u64>(byte) != 0
     }

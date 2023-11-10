@@ -79,3 +79,15 @@ pub enum Number {
     Clear(usize),
     Encrypted(RadixCiphertext),
 }
+
+impl From<usize> for Number {
+    fn from(n: usize) -> Self {
+        Self::Clear(n)
+    }
+}
+
+impl From<RadixCiphertext> for Number {
+    fn from(n: RadixCiphertext) -> Self {
+        Self::Encrypted(n)
+    }
+}
