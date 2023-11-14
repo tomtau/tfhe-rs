@@ -4,6 +4,7 @@ use rayon::prelude::*;
 
 use crate::{
     ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Pattern},
+    client_key::{self, ClientKey},
     scan::scan,
 };
 
@@ -452,24 +453,30 @@ impl ServerKey {
                 let pat_ref = pat.as_ref();
                 let (pat_len, is_not_empty) = rayon::join(
                     || self.0.max_parallelized(&orig_len, &is_empty),
-                    || self.0.bitnot_parallelized(&is_empty),
+                    || self.0.scalar_ne_parallelized(&pat_ref[0], 0),
                 );
                 let pattern_starts = (0..str_len).into_par_iter().map(|i| {
-                    let starts = self.starts_with_encrypted_par(&str_ref[i..], pat_ref);
-                    Some(self.0.mul_parallelized(&starts, &pat_len))
+                    let (starts, ended) = rayon::join(
+                        || self.starts_with_encrypted_par(&str_ref[i..], pat_ref),
+                        || self.0.scalar_eq_parallelized(&str_ref[i], 0),
+                    );
+                    Some((self.0.mul_parallelized(&starts, &pat_len), ended))
                 });
 
                 let accumulated_starts: Vec<_> = scan(
                     pattern_starts,
                     |x, y| match (x, y) {
-                        (Some(start_x), Some(start_y)) => {
-                            let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
+                        (Some((start_x, ended_x)), Some((start_y, ended_y))) => {
+                            let (in_pattern, ended) = rayon::join(
+                                || self.0.scalar_gt_parallelized(start_x, 1),
+                                || self.0.add_parallelized(ended_x, ended_y),
+                            );
                             let next_start = self.0.if_then_else_parallelized(
                                 &in_pattern,
                                 &self.0.scalar_sub_parallelized(start_x, 1),
                                 &start_y,
                             );
-                            Some(next_start)
+                            Some((next_start, ended))
                         }
                         (None, y) => y.clone(),
                         (x, None) => x.clone(),
@@ -477,13 +484,19 @@ impl ServerKey {
                     None,
                 )
                 .filter_map(|x| {
-                    x.map(|y| {
+                    x.map(|(starts, ended)| {
+                        let ((pattern_starts, not_ended), in_pattern) = rayon::join(
+                            || {
+                                rayon::join(
+                                    || self.0.eq_parallelized(&starts, &pat_len),
+                                    || self.0.scalar_le_parallelized(&ended, 1),
+                                )
+                            },
+                            || self.0.scalar_gt_parallelized(&starts, 0u64),
+                        );
                         (
-                            self.0.eq_parallelized(&y, &pat_len),
-                            self.0.bitand_parallelized(
-                                &self.0.scalar_gt_parallelized(&y, 0u64),
-                                &is_not_empty,
-                            ),
+                            self.0.bitand_parallelized(&pattern_starts, &not_ended),
+                            self.0.bitand_parallelized(&in_pattern, &is_not_empty),
                         )
                     })
                 })

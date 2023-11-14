@@ -372,3 +372,750 @@ fn main() -> io::Result<()> {
         ))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use tfhe::{integer::gen_keys, shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS};
+
+    use crate::{client_key, server_key};
+
+    #[test]
+    fn test_contains() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input = "bananas";
+        for padding_len in 1..=3 {
+            let encrypted_str = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            for pattern in ["nana", "apples"] {
+                let encrypted_pattern = client_key
+                    .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                assert_eq!(
+                    input.contains(pattern),
+                    client_key.decrypt_bool(&server_key.contains(&encrypted_str, pattern))
+                );
+                assert_eq!(
+                    input.contains(pattern),
+                    client_key
+                        .decrypt_bool(&server_key.contains(&encrypted_str, &encrypted_pattern))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ends_with() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input = "bananas";
+        for padding_len in 1..=3 {
+            let encrypted_str = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            for pattern in ["anas", "nana", "ana"] {
+                let encrypted_pattern = client_key
+                    .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                assert_eq!(
+                    input.ends_with(pattern),
+                    client_key.decrypt_bool(&server_key.ends_with(&encrypted_str, pattern))
+                );
+                assert_eq!(
+                    input.ends_with(pattern),
+                    client_key
+                        .decrypt_bool(&server_key.ends_with(&encrypted_str, &encrypted_pattern))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_eq_ignore_case() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input = "ferris";
+        let input2 = "FERRIS";
+        let encrypted_str2 = client_key.encrypt_str(input2).unwrap();
+        for padding_len in 1..=3 {
+            let encrypted_str = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            assert_eq!(
+                input.eq_ignore_ascii_case(input2),
+                client_key
+                    .decrypt_bool(&server_key.eq_ignore_case(&encrypted_str, &encrypted_str2))
+            );
+        }
+    }
+
+    #[test]
+    fn test_find() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input = "bananas";
+        for padding_len in 1..=3 {
+            let encrypted_str = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            for pattern in ["a", "z"] {
+                let encrypted_pattern = client_key
+                    .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                assert_eq!(
+                    input.find(pattern),
+                    client_key.decrypt_option_usize(&server_key.find(&encrypted_str, pattern))
+                );
+                assert_eq!(
+                    input.find(pattern),
+                    client_key
+                        .decrypt_option_usize(&server_key.find(&encrypted_str, &encrypted_pattern))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input = "";
+        let input2 = "not_empty";
+        for padding_len in 1..=3 {
+            let encrypted_str = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            let encrypted_str2 = client_key
+                .encrypt_str_padded(input2, padding_len.try_into().unwrap())
+                .unwrap();
+
+            assert_eq!(
+                input.is_empty(),
+                client_key.decrypt_bool(&server_key.is_empty(&encrypted_str))
+            );
+            assert_eq!(
+                input2.is_empty(),
+                client_key.decrypt_bool(&server_key.is_empty(&encrypted_str2))
+            );
+        }
+    }
+
+    #[test]
+    fn test_len() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input = "foo";
+        for padding_len in 1..=3 {
+            let encrypted_str = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+
+            assert_eq!(
+                input.len(),
+                client_key.decrypt_usize(&server_key.len(&encrypted_str))
+            );
+        }
+    }
+
+    #[test]
+    fn test_repeat() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input = "abc";
+        for n in 0..=4 {
+            // let encrypted_n = client_key.encrypt_usize(n);
+
+            for padding_len in 1..=3 {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+
+                assert_eq!(
+                    input.repeat(n),
+                    client_key.decrypt_str(&server_key.repeat(&encrypted_str, n))
+                );
+                // assert_eq!(
+                //     input.repeat(n),
+                //     client_key.decrypt_str(&server_key.repeat(&encrypted_str, encrypted_n.clone()))
+                // );
+            }
+        }
+    }
+
+    #[test]
+    fn test_replace() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            (
+                "this is old",
+                vec![("old", "new"), ("is", "an"), ("x", "y")],
+            ),
+            (
+                "aaabaaab",
+                vec![("a", "c"), ("aa", "c"), ("aa", "cc"), ("aaa", "c")],
+            ),
+            ("cabcab", vec![("c", "aa"), ("cab", "")]),
+            ("banana", vec![("ana", "anas")]),
+        ];
+        for padding_len in 1..=3 {
+            for (input, replacements) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                for (pattern, replacement) in replacements {
+                    println!("clear: {input} {pattern} {replacement} {padding_len}");
+                    assert_eq!(
+                        input.replace(pattern, replacement),
+                        client_key.decrypt_str(&server_key.replace(
+                            &encrypted_str,
+                            *pattern,
+                            *replacement
+                        ))
+                    );
+                    let encrypted_pattern = client_key
+                        .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+                        .unwrap();
+                    let encrypted_replacement = client_key
+                        .encrypt_str_padded(replacement, padding_len.try_into().unwrap())
+                        .unwrap();
+                    println!("encrypted: {input} {pattern} {replacement} {padding_len}");
+                    assert_eq!(
+                        input.replace(pattern, replacement),
+                        client_key.decrypt_str(&server_key.replace(
+                            &encrypted_str,
+                            &encrypted_pattern,
+                            &encrypted_replacement
+                        ))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_replacen() {
+        //FIXME
+    }
+
+    #[test]
+    fn test_rfind() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input = "bananas";
+        for padding_len in 1..=3 {
+            let encrypted_str = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            for pattern in ["a", "z"] {
+                let encrypted_pattern = client_key
+                    .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                assert_eq!(
+                    input.rfind(pattern),
+                    client_key.decrypt_option_usize(&server_key.rfind(&encrypted_str, pattern))
+                );
+                assert_eq!(
+                    input.rfind(pattern),
+                    client_key.decrypt_option_usize(
+                        &server_key.rfind(&encrypted_str, &encrypted_pattern)
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_rsplit() {
+        //FIXME
+    }
+
+    #[test]
+    fn test_rsplit_once() {
+        //FIXME
+    }
+
+    #[test]
+    fn test_rsplitn() {
+        //FIXME
+    }
+
+    #[test]
+    fn test_rsplit_terminator() {
+        //FIXME
+    }
+
+    #[test]
+    fn test_split() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            ("Mary had a little lamb", " "),
+            ("", "X"),
+            ("lionXXtigerXleo", "X"),
+            ("lion::tiger::leo", "::"),
+            ("||||a||b|c", "|"),
+            ("(///)", "/"),
+            ("010", "0"),
+            ("rust", ""),
+            ("    a  b c", " "),
+            ("banana", "ana"),
+            ("foo:bar", "foo:"),
+            ("foo:bar", "bar"),
+        ];
+        for padding_len in 1..=3 {
+            for (input, split_pattern) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                let encrypted_split_pattern = client_key
+                    .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                println!("clear: {input} {split_pattern} {padding_len}");
+                assert_eq!(
+                    input.split(split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.split(&encrypted_str, *split_pattern))
+                );
+                println!("encrypted: {input} {split_pattern} {padding_len}");
+
+                assert_eq!(
+                    input.split(split_pattern).collect::<Vec<_>>(),
+                    client_key
+                        .decrypt_split(server_key.split(&encrypted_str, &encrypted_split_pattern))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_ascii_whitespace() {
+        //FIXME
+    }
+
+    #[test]
+    fn test_split_inclusive() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            ("Mary had a little lamb\nlittle lamb\nlittle lamb.", "\n"),
+            ("Mary had a little lamb\nlittle lamb\nlittle lamb.\n", "\n"),
+            ("", "X"),
+            ("lionXXtigerXleo", "X"),
+            ("lion::tiger::leo", "::"),
+            ("||||a||b|c", "|"),
+            ("(///)", "/"),
+            ("010", "0"),
+            ("rust", ""),
+            ("    a  b c", " "),
+            ("banana", "ana"),
+            ("foo:bar", "foo:"),
+            ("foo:bar", "bar"),
+        ];
+        for padding_len in 1..=3 {
+            for (input, split_pattern) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                let encrypted_split_pattern = client_key
+                    .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                assert_eq!(
+                    input.split_inclusive(split_pattern).collect::<Vec<_>>(),
+                    client_key
+                        .decrypt_split(server_key.split_inclusive(&encrypted_str, *split_pattern))
+                );
+                assert_eq!(
+                    input.split_inclusive(split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(
+                        server_key.split_inclusive(&encrypted_str, &encrypted_split_pattern)
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_terminator() {
+        //FIXME
+    }
+
+    #[test]
+    fn test_splitn() {
+        //FIXME
+    }
+
+    #[test]
+    fn test_starts_with() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input = "bananas";
+        for padding_len in 1..=3 {
+            let encrypted_str = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            for pattern in ["bana", "nana"] {
+                let encrypted_pattern = client_key
+                    .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                assert_eq!(
+                    input.starts_with(pattern),
+                    client_key.decrypt_bool(&server_key.starts_with(&encrypted_str, pattern))
+                );
+                assert_eq!(
+                    input.starts_with(pattern),
+                    client_key
+                        .decrypt_bool(&server_key.starts_with(&encrypted_str, &encrypted_pattern))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_strip_prefix() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [("foo:bar", vec!["foo:", "bar"]), ("foofoo", vec!["foo"])];
+        for padding_len in 1..=3 {
+            for (input, patterns) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                for pattern in patterns {
+                    assert_eq!(
+                        input.strip_prefix(pattern),
+                        client_key
+                            .decrypt_option_str(&server_key.strip_prefix(&encrypted_str, *pattern))
+                            .as_deref()
+                    );
+                    let encrypted_pattern = client_key
+                        .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+                        .unwrap();
+                    assert_eq!(
+                        input.strip_prefix(pattern),
+                        client_key
+                            .decrypt_option_str(
+                                &server_key.strip_prefix(&encrypted_str, &encrypted_pattern,)
+                            )
+                            .as_deref()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_strip_suffix() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            ("foo:bar", vec!["foo:", "bar"]),
+            ("foofoo", vec!["foo"]),
+            ("banana", vec!["ana"]),
+        ];
+        for padding_len in 1..=3 {
+            for (input, patterns) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                for pattern in patterns {
+                    assert_eq!(
+                        input.strip_suffix(pattern),
+                        client_key
+                            .decrypt_option_str(&server_key.strip_suffix(&encrypted_str, *pattern))
+                            .as_deref()
+                    );
+                    let encrypted_pattern = client_key
+                        .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+                        .unwrap();
+                    assert_eq!(
+                        input.strip_suffix(pattern),
+                        client_key
+                            .decrypt_option_str(
+                                &server_key.strip_suffix(&encrypted_str, &encrypted_pattern,)
+                            )
+                            .as_deref()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_to_lowercase() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = ["HELLO", "hello"];
+        for padding_len in 1..=3 {
+            for input in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                assert_eq!(
+                    input.to_lowercase(),
+                    client_key.decrypt_str(&server_key.to_lowercase(&encrypted_str))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_to_uppercase() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = ["HELLO", "hello"];
+        for padding_len in 1..=3 {
+            for input in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                assert_eq!(
+                    input.to_uppercase(),
+                    client_key.decrypt_str(&server_key.to_uppercase(&encrypted_str))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_trim() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let input = "\n Hello\tworld\t\n";
+        for padding_len in 1..=3 {
+            let s = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            assert_eq!(input.trim(), client_key.decrypt_str(&server_key.trim(&s)));
+        }
+    }
+
+    #[test]
+    fn test_trim_end() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let input = "\n Hello\tworld\t\n";
+        for padding_len in 1..=3 {
+            let s = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            assert_eq!(
+                input.trim_end(),
+                client_key.decrypt_str(&server_key.trim_end(&s))
+            );
+        }
+    }
+
+    #[test]
+    fn test_trim_start() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let input = "\n Hello\tworld\t\n";
+        for padding_len in 1..=3 {
+            let s = client_key
+                .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                .unwrap();
+            assert_eq!(
+                input.trim_start(),
+                client_key.decrypt_str(&server_key.trim_start(&s))
+            );
+        }
+    }
+
+    #[test]
+    fn test_concat() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let input_a = "hello";
+        let input_b = "world";
+        for padding_len in 1..=3 {
+            let s1 = client_key
+                .encrypt_str_padded(input_a, padding_len.try_into().unwrap())
+                .unwrap();
+            let s2 = client_key
+                .encrypt_str_padded(input_b, padding_len.try_into().unwrap())
+                .unwrap();
+            assert_eq!(
+                input_a.to_owned() + input_b,
+                client_key.decrypt_str(&server_key.concat(&s1, &s2))
+            );
+        }
+    }
+
+    #[test]
+    fn test_ge() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let inputs = [
+            ("A", vec!["B"]),
+            ("bananas", vec!["ana", "apples", "ban", "bbn"]),
+        ];
+        for (input_a, inputs) in &inputs {
+            for input_b in inputs {
+                for padding_len in 1..=3 {
+                    let s1 = client_key
+                        .encrypt_str_padded(input_a, padding_len.try_into().unwrap())
+                        .unwrap();
+                    let s2 = client_key
+                        .encrypt_str_padded(input_b, padding_len.try_into().unwrap())
+                        .unwrap();
+                    assert_eq!(
+                        input_a >= input_b,
+                        client_key.decrypt_bool(&server_key.ge(&s1, &s2))
+                    );
+                    assert_eq!(
+                        input_a >= input_a,
+                        client_key.decrypt_bool(&server_key.ge(&s1, &s1))
+                    );
+                    assert_eq!(
+                        input_b >= input_a,
+                        client_key.decrypt_bool(&server_key.ge(&s2, &s1))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_le() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let inputs = [
+            ("A", vec!["B"]),
+            ("bananas", vec!["ana", "apples", "ban", "bbn"]),
+        ];
+        for (input_a, inputs) in &inputs {
+            for input_b in inputs {
+                for padding_len in 1..=3 {
+                    let s1 = client_key
+                        .encrypt_str_padded(input_a, padding_len.try_into().unwrap())
+                        .unwrap();
+                    let s2 = client_key
+                        .encrypt_str_padded(input_b, padding_len.try_into().unwrap())
+                        .unwrap();
+                    assert_eq!(
+                        input_a <= input_b,
+                        client_key.decrypt_bool(&server_key.le(&s1, &s2))
+                    );
+                    assert_eq!(
+                        input_a <= input_a,
+                        client_key.decrypt_bool(&server_key.le(&s1, &s1))
+                    );
+                    assert_eq!(
+                        input_b <= input_a,
+                        client_key.decrypt_bool(&server_key.le(&s2, &s1))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_ne() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let inputs = [
+            ("A", vec!["B"]),
+            ("bananas", vec!["ana", "apples", "ban", "bbn"]),
+        ];
+        for (input_a, inputs) in &inputs {
+            for input_b in inputs {
+                for padding_len in 1..=3 {
+                    let s1 = client_key
+                        .encrypt_str_padded(input_a, padding_len.try_into().unwrap())
+                        .unwrap();
+                    let s2 = client_key
+                        .encrypt_str_padded(input_b, padding_len.try_into().unwrap())
+                        .unwrap();
+                    assert_eq!(
+                        input_a != input_b,
+                        client_key.decrypt_bool(&server_key.ne(&s1, &s2))
+                    );
+                    assert_eq!(
+                        input_a != input_a,
+                        client_key.decrypt_bool(&server_key.ne(&s1, &s1))
+                    );
+                    assert_eq!(
+                        input_b != input_a,
+                        client_key.decrypt_bool(&server_key.ne(&s2, &s1))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_eq() {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let inputs = [
+            ("A", vec!["B"]),
+            ("bananas", vec!["ana", "apples", "ban", "bbn"]),
+        ];
+        for (input_a, inputs) in &inputs {
+            for input_b in inputs {
+                for padding_len in 1..=3 {
+                    let s1 = client_key
+                        .encrypt_str_padded(input_a, padding_len.try_into().unwrap())
+                        .unwrap();
+                    let s2 = client_key
+                        .encrypt_str_padded(input_b, padding_len.try_into().unwrap())
+                        .unwrap();
+                    assert_eq!(
+                        input_a == input_b,
+                        client_key.decrypt_bool(&server_key.eq(&s1, &s2))
+                    );
+                    assert_eq!(
+                        input_a == input_a,
+                        client_key.decrypt_bool(&server_key.eq(&s1, &s1))
+                    );
+                    assert_eq!(
+                        input_b == input_a,
+                        client_key.decrypt_bool(&server_key.eq(&s2, &s1))
+                    );
+                }
+            }
+        }
+    }
+}

@@ -725,15 +725,23 @@ impl ServerKey {
                             .create_trivial_radix::<u64, FheAsciiChar>(*x as u64, NUM_BLOCKS)
                     })
                     .collect();
-                let pattern_starts = str_ref
-                    .par_windows(from_pat.len())
-                    .map(|window| Some(self.starts_with_clear_par(window, from_pat)));
+                let pattern_starts = str_ref.par_windows(from_pat.len()).map(|window| {
+                    let starts = self.starts_with_clear_par(window, from_pat);
+                    Some(
+                        self.0
+                            .scalar_mul_parallelized(&starts, from_pat.len() as u64),
+                    )
+                });
                 let accumulated_starts: Vec<_> = scan(
                     pattern_starts,
                     |x, y| match (x, y) {
                         (Some(start_x), Some(start_y)) => {
-                            let not_start_x = self.0.bitnot_parallelized(start_x);
-                            let next_start = self.0.bitand_parallelized(&not_start_x, &start_y);
+                            let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
+                            let next_start = self.0.if_then_else_parallelized(
+                                &in_pattern,
+                                &self.0.scalar_sub_parallelized(start_x, 1),
+                                &start_y,
+                            );
                             Some(next_start)
                         }
                         (None, y) => y.clone(),
@@ -741,7 +749,7 @@ impl ServerKey {
                     },
                     None,
                 )
-                .flatten()
+                .flat_map(|x| x.map(|x| self.0.scalar_eq_parallelized(&x, from_pat.len() as u64)))
                 .collect();
                 let mut result = str_ref.to_vec();
                 for (i, starts) in accumulated_starts.iter().enumerate() {
@@ -1388,9 +1396,9 @@ impl ServerKey {
     ///
     /// let s1 = client_key.encrypt_str("A").unwrap();
     /// let s2 = client_key.encrypt_str("B").unwrap();
-    /// assert!(!client_key.ge(&s1, &s2));
-    /// assert!(client_key.ge(&s1, &s1));
-    /// assert!(client_key.ge(&s2, &s1));
+    /// assert!(!client_key.decrypt_bool(&server_key.ge(&s1, &s2)));
+    /// assert!(client_key.decrypt_bool(&server_key.ge(&s1, &s1)));
+    /// assert!(client_key.decrypt_bool(&server_key.ge(&s2, &s1)));
     /// ```
     #[inline]
     #[must_use]
@@ -1468,9 +1476,9 @@ impl ServerKey {
     ///
     /// let s1 = client_key.encrypt_str("A").unwrap();
     /// let s2 = client_key.encrypt_str("B").unwrap();
-    /// assert!(client_key.le(&s1, &ss));
-    /// assert!(client_key.le(&s1, &s2));
-    /// assert!(!client_key.le(&s2, &s1));
+    /// assert!(client_key.decrypt_bool(&server_key.le(&s1, &s2)));
+    /// assert!(client_key.decrypt_bool(&server_key.le(&s1, &s1)));
+    /// assert!(!client_key.decrypt_bool(&server_key.le(&s2, &s1)));
     /// ```
     #[inline]
     #[must_use]
@@ -1532,8 +1540,8 @@ impl ServerKey {
     ///
     /// let s1 = client_key.encrypt_str("A").unwrap();
     /// let s2 = client_key.encrypt_str("B").unwrap();
-    /// assert!(client_key.ne(&s1, &s2));
-    /// assert!(!client_key.ne(&s1, &s1));
+    /// assert!(client_key.decrypt_bool(&server_key.ne(&s1, &s2)));
+    /// assert!(!client_key.decrypt_bool(&server_key.ne(&s1, &s1)));
     /// ```
     #[inline]
     #[must_use]
@@ -1607,8 +1615,8 @@ impl ServerKey {
     ///
     /// let s1 = client_key.encrypt_str("A").unwrap();
     /// let s2 = client_key.encrypt_str("B").unwrap();
-    /// assert!(client_key.eq(&s1, &s1));
-    /// assert!(!client_key.eq(&s1, &s2));
+    /// assert!(client_key.decrypt_bool(&server_key.eq(&s1, &s1)));
+    /// assert!(!client_key.decrypt_bool(&server_key.eq(&s1, &s2)));
     /// ```
     #[must_use]
     pub fn eq(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
