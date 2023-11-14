@@ -8,7 +8,27 @@ pub type FheBool = RadixCiphertext;
 pub type FheUsize = RadixCiphertext;
 pub type FheOption<T> = (FheBool, T);
 
-pub type FheAsciiChar = RadixCiphertext;
+/// A FHE wrapper for an ASCII character.
+#[derive(Clone)]
+pub struct FheAsciiChar(RadixCiphertext);
+
+impl From<RadixCiphertext> for FheAsciiChar {
+    fn from(c: RadixCiphertext) -> Self {
+        Self(c)
+    }
+}
+
+impl AsRef<RadixCiphertext> for FheAsciiChar {
+    fn as_ref(&self) -> &RadixCiphertext {
+        &self.0
+    }
+}
+
+impl AsMut<RadixCiphertext> for FheAsciiChar {
+    fn as_mut(&mut self) -> &mut RadixCiphertext {
+        &mut self.0
+    }
+}
 
 /// A FHE wrapper for a string of ASCII characters.
 #[derive(Clone)]

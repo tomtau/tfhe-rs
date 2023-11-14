@@ -1,9 +1,9 @@
 use dashmap::DashMap;
 use rayon::prelude::*;
+use tfhe::integer::RadixCiphertext;
 
 use crate::{
     ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, Pattern},
-    client_key::NUM_BLOCKS,
     scan::scan,
 };
 
@@ -18,7 +18,7 @@ impl ServerKey {
     fn is_whitespace(&self, c: &FheAsciiChar) -> FheBool {
         ASCII_WHITESPACES
             .par_iter()
-            .map(|&x| Some(self.0.scalar_eq_parallelized(c, x as u8)))
+            .map(|&x| Some(self.0.scalar_eq_parallelized(c.as_ref(), x as u8)))
             .reduce(|| None, |a, b| self.or(a.as_ref(), b.as_ref()))
             .unwrap_or_else(|| self.false_ct())
     }
@@ -74,12 +74,19 @@ impl ServerKey {
                     let mut result = Vec::with_capacity(str_l);
                     result.par_extend(enc_ref.par_iter().enumerate().map(|(i, c)| {
                         if i + pat_l < str_l {
-                            self.0
-                                .if_then_else_parallelized(&starts_with, &enc_ref[i + pat_l], c)
+                            self.0.if_then_else_parallelized(
+                                &starts_with,
+                                enc_ref[i + pat_l].as_ref(),
+                                c.as_ref(),
+                            )
                         } else {
-                            self.0
-                                .if_then_else_parallelized(&starts_with, &self.false_ct(), c)
+                            self.0.if_then_else_parallelized(
+                                &starts_with,
+                                &self.false_ct(),
+                                c.as_ref(),
+                            )
                         }
+                        .into()
                     }));
                     (starts_with, FheString::new_unchecked(result))
                 }
@@ -95,11 +102,11 @@ impl ServerKey {
                         let ((pattern_ended, a_eq_b), pattern_not_ended) = rayon::join(
                             || {
                                 rayon::join(
-                                    || self.0.scalar_eq_parallelized(b, 0),
-                                    || self.0.eq_parallelized(a, b),
+                                    || self.0.scalar_eq_parallelized(b.as_ref(), 0),
+                                    || self.0.eq_parallelized(a.as_ref(), b.as_ref()),
                                 )
                             },
-                            || self.0.scalar_ne_parallelized(b, 0),
+                            || self.0.scalar_ne_parallelized(b.as_ref(), 0),
                         );
                         (
                             Some(self.0.if_then_else_parallelized(
@@ -126,13 +133,20 @@ impl ServerKey {
                         let mut c = window[0].clone();
                         // TODO: can this be parallelized?
                         for j in 1..window.len() {
-                            let c_to_move = if i + pat_l < str_l { &window[j] } else { &zero };
+                            let c_to_move = if i + pat_l < str_l {
+                                window[j].as_ref()
+                            } else {
+                                &zero
+                            };
                             // move starts_with and if pattern is not ended at j - 1
-                            c = self.0.if_then_else_parallelized(
-                                &pattern_not_ended[j - 1],
-                                c_to_move,
-                                &c,
-                            );
+                            c = self
+                                .0
+                                .if_then_else_parallelized(
+                                    &pattern_not_ended[j - 1],
+                                    c_to_move,
+                                    c.as_ref(),
+                                )
+                                .into();
                         }
                         c
                     }));
@@ -207,11 +221,10 @@ impl ServerKey {
                 let found = clear_mask.last().cloned().expect("last element");
 
                 let mut result = Vec::with_capacity(fst.len());
-                result.par_extend(
-                    fst.par_iter().zip(clear_mask).map(|(c, cond)| {
-                        self.if_then_else(cond.as_ref(), false, &self.false_ct(), c)
-                    }),
-                );
+                result.par_extend(fst.par_iter().zip(clear_mask).map(|(c, cond)| {
+                    self.if_then_else(cond.as_ref(), false, &self.false_ct(), c.as_ref())
+                        .into()
+                }));
                 result.push(fst.last().cloned().expect("last element"));
                 (
                     found.unwrap_or_else(|| self.false_ct()),
@@ -242,7 +255,9 @@ impl ServerKey {
                 let mut result = Vec::with_capacity(fst.len());
                 result.par_extend(fst.par_iter().zip(clear_mask).map(|(c, found)| {
                     let cond = self.0.bitand_parallelized(&found, &not_empty_pattern);
-                    self.0.if_then_else_parallelized(&cond, &self.false_ct(), c)
+                    self.0
+                        .if_then_else_parallelized(&cond, &self.false_ct(), c.as_ref())
+                        .into()
                 }));
                 (found, FheString::new_unchecked(result))
             }
@@ -323,7 +338,7 @@ impl ServerKey {
                 )),
                 Some(self.0.bitand_parallelized(
                     &left_whitespace,
-                    &self.0.scalar_eq_parallelized(&window[1], 0),
+                    &self.0.scalar_eq_parallelized(window[1].as_ref(), 0),
                 )),
             )
         });
@@ -353,7 +368,8 @@ impl ServerKey {
                         let not_hit_right_boundary = self.0.bitnot_parallelized(&hrb);
                         let cond = self.0.bitand_parallelized(&not_hit_right_boundary, &ews);
                         self.0
-                            .if_then_else_parallelized(&cond, &self.false_ct(), &c)
+                            .if_then_else_parallelized(&cond, &self.false_ct(), c.as_ref())
+                            .into()
                     } else {
                         c.clone()
                     }
@@ -444,7 +460,7 @@ impl ServerKey {
             .into_par_iter()
             .map(|i| {
                 self.0
-                    .create_trivial_radix::<u64, FheAsciiChar>(i as u64, NUM_BLOCKS)
+                    .create_trivial_radix::<u64, RadixCiphertext>(i as u64, self.1)
             })
             .zip(accumulated_ws_before_boundary)
             .map(|(i, count)| self.0.sub_parallelized(&i, &count))
@@ -457,7 +473,7 @@ impl ServerKey {
                 .map(|j| {
                     self.0.if_then_else_parallelized(
                         &self.0.scalar_eq_parallelized(&shifted_indices[j], i as u64),
-                        &fst[j],
+                        fst[j].as_ref(),
                         &self.false_ct(),
                     )
                 })
@@ -465,6 +481,7 @@ impl ServerKey {
                     || self.false_ct(),
                     |a, b| self.0.bitxor_parallelized(&a, &b),
                 )
+                .into()
         }));
         FheString::new_unchecked(result)
     }

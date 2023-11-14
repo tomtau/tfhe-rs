@@ -4,7 +4,6 @@ use rayon::prelude::*;
 
 use crate::{
     ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Pattern},
-    client_key::{self, ClientKey},
     scan::scan,
 };
 
@@ -379,13 +378,13 @@ impl ServerKey {
                 let zero = self.false_ct();
                 let one = self.true_ct();
                 let mut split_sequence = VecDeque::new();
-                split_sequence.push_back((one.clone(), zero.clone()));
+                split_sequence.push_back((one.clone(), zero.clone().into()));
                 split_sequence.par_extend(
                     str_ref
                         .par_iter()
-                        .map(|x| (self.0.scalar_ne_parallelized(x, 0), x.clone())),
+                        .map(|x| (self.0.scalar_ne_parallelized(x.as_ref(), 0), x.clone())),
                 );
-                split_sequence.push_back((one.clone(), zero));
+                split_sequence.push_back((one.clone(), zero.into()));
 
                 FheSplitResult::Split(FhePatternLen::Plain(0), split_sequence)
             }
@@ -439,7 +438,9 @@ impl ServerKey {
                         .map(|((starts, in_pattern), c)| {
                             (
                                 starts,
-                                self.0.if_then_else_parallelized(&in_pattern, &zero, c),
+                                self.0
+                                    .if_then_else_parallelized(&in_pattern, &zero, c.as_ref())
+                                    .into(),
                             )
                         }),
                 );
@@ -449,16 +450,16 @@ impl ServerKey {
                 let zero = self.false_ct();
                 let (is_empty, orig_len) = rayon::join(|| self.is_empty(pat), || self.len(pat));
                 let mut split_sequence = VecDeque::new();
-                split_sequence.push_back((is_empty.clone(), zero.clone()));
+                split_sequence.push_back((is_empty.clone(), zero.clone().into()));
                 let pat_ref = pat.as_ref();
                 let (pat_len, is_not_empty) = rayon::join(
                     || self.0.max_parallelized(&orig_len, &is_empty),
-                    || self.0.scalar_ne_parallelized(&pat_ref[0], 0),
+                    || self.0.scalar_ne_parallelized(pat_ref[0].as_ref(), 0),
                 );
                 let pattern_starts = (0..str_len).into_par_iter().map(|i| {
                     let (starts, ended) = rayon::join(
                         || self.starts_with_encrypted_par(&str_ref[i..], pat_ref),
-                        || self.0.scalar_eq_parallelized(&str_ref[i], 0),
+                        || self.0.scalar_eq_parallelized(str_ref[i].as_ref(), 0),
                     );
                     Some((self.0.mul_parallelized(&starts, &pat_len), ended))
                 });
@@ -508,7 +509,9 @@ impl ServerKey {
                         .map(|((starts, in_pattern), c)| {
                             (
                                 starts,
-                                self.0.if_then_else_parallelized(&in_pattern, &zero, c),
+                                self.0
+                                    .if_then_else_parallelized(&in_pattern, &zero, c.as_ref())
+                                    .into(),
                             )
                         }),
                 );
@@ -606,11 +609,11 @@ impl ServerKey {
                 let zero = self.false_ct();
                 let one = self.true_ct();
                 let mut split_sequence = VecDeque::new();
-                split_sequence.push_back((one.clone(), zero));
+                split_sequence.push_back((one.clone(), zero.into()));
                 split_sequence.par_extend(
                     str_ref
                         .par_iter()
-                        .map(|x| (self.0.scalar_ne_parallelized(x, 0), x.clone())),
+                        .map(|x| (self.0.scalar_ne_parallelized(x.as_ref(), 0), x.clone())),
                 );
                 FheSplitResult::SplitInclusive(split_sequence)
             }
@@ -658,7 +661,7 @@ impl ServerKey {
                 let zero = self.false_ct();
                 let is_empty = self.is_empty(pat);
                 let mut split_sequence = VecDeque::new();
-                split_sequence.push_back((is_empty.clone(), zero));
+                split_sequence.push_back((is_empty.clone(), zero.into()));
                 let pat_ref = pat.as_ref();
                 let pat_len = self.0.max_parallelized(&self.len(pat), &is_empty);
                 let pattern_starts = (0..str_len).into_par_iter().map(|i| {

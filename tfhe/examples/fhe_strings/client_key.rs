@@ -11,10 +11,10 @@ use crate::{
     server_key::{FhePatternLen, FheSplitResult},
 };
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct ClientKey(IntegerClientKey);
+pub(crate) const PRECISION_BITS: usize = 8;
 
-pub(crate) const NUM_BLOCKS: usize = 4;
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ClientKey(IntegerClientKey, usize);
 
 impl ClientKey {
     pub fn new<P>(params: P) -> Self
@@ -22,15 +22,17 @@ impl ClientKey {
         P: TryInto<ShortintParameterSet>,
         <P as TryInto<ShortintParameterSet>>::Error: std::fmt::Debug,
     {
-        Self(gen_keys(params).0)
+        let key = gen_keys(params).0;
+        let num_blocks = PRECISION_BITS / key.parameters().message_modulus().0.ilog2() as usize;
+        Self(key, num_blocks)
     }
 
     pub(crate) fn encrypt_byte(&self, byte: u8) -> FheAsciiChar {
-        self.0.encrypt_radix(byte as u64, NUM_BLOCKS)
+        self.0.encrypt_radix(byte as u64, self.1).into()
     }
 
     pub fn encrypt_usize(&self, size: usize) -> FheUsize {
-        self.0.encrypt_radix(size as u64, NUM_BLOCKS)
+        self.0.encrypt_radix(size as u64, self.1)
     }
 
     pub fn decrypt_bool(&self, byte: &FheBool) -> bool {
@@ -68,7 +70,7 @@ impl ClientKey {
         let mut last_found = false;
         let mut split_iter = split.into_iter().enumerate();
         while let Some((i, (found, char))) = split_iter.next() {
-            let char: u64 = self.0.decrypt_radix(&char);
+            let char: u64 = self.0.decrypt_radix(char.as_ref());
             let found_dec = self.decrypt_bool(&found);
             last_found = found_dec || (char == 0 && last_found);
 
@@ -115,7 +117,7 @@ impl ClientKey {
 
     pub fn decrypt_str(&self, s: &FheString) -> String {
         String::from_iter(s.as_ref().iter().map_while(|byte| {
-            let b: u64 = self.0.decrypt_radix(byte);
+            let b: u64 = self.0.decrypt_radix(byte.as_ref());
             if b > 0 && b < 255 {
                 Some(b as u8 as char)
             } else {
@@ -127,7 +129,8 @@ impl ClientKey {
 
 impl From<IntegerClientKey> for ClientKey {
     fn from(key: IntegerClientKey) -> Self {
-        Self(key)
+        let num_blocks = PRECISION_BITS / key.parameters().message_modulus().0.ilog2() as usize;
+        Self(key, num_blocks)
     }
 }
 
