@@ -3,7 +3,7 @@ use rayon::prelude::*;
 use tfhe::integer::RadixCiphertext;
 
 use crate::{
-    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, Pattern},
+    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, Padded, Pattern},
     scan::scan,
 };
 
@@ -54,11 +54,11 @@ impl ServerKey {
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[must_use = "this returns the remaining substring as a new FheString, \
                   without modifying the original"]
-    pub fn strip_prefix<'a, P: Into<Pattern<'a>>>(
+    pub fn strip_prefix<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         prefix: P,
-    ) -> FheOption<FheString> {
+    ) -> FheOption<FheString<Padded>> {
         let enc_ref = encrypted_str.as_ref();
         let str_l = enc_ref.len();
 
@@ -189,11 +189,11 @@ impl ServerKey {
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[must_use = "this returns the remaining substring as a new FheString, \
                   without modifying the original"]
-    pub fn strip_suffix<'a, P: Into<Pattern<'a>>>(
+    pub fn strip_suffix<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         suffix: P,
-    ) -> FheOption<FheString> {
+    ) -> FheOption<FheString<Padded>> {
         match suffix.into() {
             Pattern::Clear(pat) => {
                 if pat.is_empty() {
@@ -283,7 +283,7 @@ impl ServerKey {
     #[inline]
     #[must_use = "this returns the trimmed string as a new FheString, \
                   without modifying the original"]
-    pub fn trim(&self, encrypted_str: &FheString) -> FheString {
+    pub fn trim(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
         // TODO: do something better than this
         self.trim_start(&self.trim_end(&encrypted_str))
     }
@@ -307,7 +307,7 @@ impl ServerKey {
     #[inline]
     #[must_use = "this returns the trimmed string as a new FheString, \
                   without modifying the original"]
-    pub fn trim_end(&self, encrypted_str: &FheString) -> FheString {
+    pub fn trim_end(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
         let fst = encrypted_str.as_ref();
         if fst.len() < 2 {
             return encrypted_str.clone();
@@ -399,7 +399,7 @@ impl ServerKey {
     #[inline]
     #[must_use = "this returns the trimmed string as a new FheString, \
                   without modifying the original"]
-    pub fn trim_start(&self, encrypted_str: &FheString) -> FheString {
+    pub fn trim_start(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
         let fst = encrypted_str.as_ref();
         let str_l = fst.len();
         if str_l < 2 {

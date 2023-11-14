@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tfhe::integer::{RadixCiphertext, ServerKey as IntegerServerKey};
 
 use crate::{
-    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Number, Pattern},
+    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Number, Padded, Pattern},
     client_key::{ClientKey, PRECISION_BITS},
     scan::scan,
 };
@@ -129,7 +129,11 @@ impl ServerKey {
     /// API not fully fleshed out and ready to be stabilized
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[inline]
-    pub fn contains<'a, P: Into<Pattern<'a>>>(&self, encrypted_str: &FheString, pat: P) -> FheBool {
+    pub fn contains<'a, P: Into<Pattern<'a, Padded>>>(
+        &self,
+        encrypted_str: &FheString<Padded>,
+        pat: P,
+    ) -> FheBool {
         match pat.into() {
             Pattern::Clear(pat) => {
                 if pat.is_empty() {
@@ -186,9 +190,9 @@ impl ServerKey {
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
-    pub fn ends_with<'a, P: Into<Pattern<'a>>>(
+    pub fn ends_with<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         pat: P,
     ) -> FheBool {
         match pat.into() {
@@ -327,8 +331,8 @@ impl ServerKey {
     #[inline]
     pub fn eq_ignore_case(
         &self,
-        encrypted_str: &FheString,
-        other_encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
+        other_encrypted_str: &FheString<Padded>,
     ) -> FheBool {
         let fst = encrypted_str.as_ref();
         let snd = other_encrypted_str.as_ref();
@@ -372,9 +376,9 @@ impl ServerKey {
     /// API not fully fleshed out and ready to be stabilized
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[inline]
-    pub fn find<'a, P: Into<Pattern<'a>>>(
+    pub fn find<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         pat: P,
     ) -> FheOption<FheUsize> {
         match pat.into() {
@@ -450,7 +454,7 @@ impl ServerKey {
     /// ```
     #[must_use]
     #[inline]
-    pub fn is_empty(&self, encrypted_str: &FheString) -> FheBool {
+    pub fn is_empty(&self, encrypted_str: &FheString<Padded>) -> FheBool {
         self.0
             .scalar_eq_parallelized(&encrypted_str.as_ref()[0].as_ref(), 0)
     }
@@ -473,7 +477,7 @@ impl ServerKey {
     /// ```
     #[must_use]
     #[inline]
-    pub fn len(&self, encrypted_str: &FheString) -> FheUsize {
+    pub fn len(&self, encrypted_str: &FheString<Padded>) -> FheUsize {
         let fst = encrypted_str.as_ref();
         fst[..fst.len() - 1]
             .par_iter()
@@ -484,9 +488,9 @@ impl ServerKey {
 
     fn repeat_clear_rec<'a>(
         &self,
-        substrings: &'a DashMap<usize, FheString>,
+        substrings: &'a DashMap<usize, FheString<Padded>>,
         n: usize,
-    ) -> dashmap::mapref::one::Ref<'a, usize, FheString> {
+    ) -> dashmap::mapref::one::Ref<'a, usize, FheString<Padded>> {
         if let Some(s) = substrings.get(&n) {
             s
         } else {
@@ -544,7 +548,11 @@ impl ServerKey {
     /// let huge = server_key.repeat(&s, usize::MAX);
     /// ```
     #[must_use]
-    pub fn repeat<N: Into<Number>>(&self, encrypted_str: &FheString, n: N) -> FheString {
+    pub fn repeat<N: Into<Number>>(
+        &self,
+        encrypted_str: &FheString<Padded>,
+        n: N,
+    ) -> FheString<Padded> {
         let str_ref = encrypted_str.as_ref();
         let zero = self.false_ct();
 
@@ -701,12 +709,12 @@ impl ServerKey {
     #[must_use = "this returns the replaced FheString as a new allocation, \
                   without modifying the original"]
     #[inline]
-    pub fn replace<'a, P: Into<Pattern<'a>>>(
+    pub fn replace<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         from: P,
         to: P,
-    ) -> FheString {
+    ) -> FheString<Padded> {
         let str_ref = encrypted_str.as_ref();
         match (from.into(), to.into()) {
             (Pattern::Clear(from_pat), Pattern::Clear(to_pat))
@@ -1058,8 +1066,8 @@ impl ServerKey {
                   without modifying the original"]
     pub fn replacen<'a>(
         &'a self,
-        encrypted_str: &FheString,
-        pat: Pattern<'a>,
+        encrypted_str: &FheString<Padded>,
+        pat: Pattern<'a, Padded>,
         to: &str,
         count: usize,
     ) -> String {
@@ -1094,9 +1102,9 @@ impl ServerKey {
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     /// ```
     #[inline]
-    pub fn rfind<'a, P: Into<Pattern<'a>>>(
+    pub fn rfind<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         pat: P,
     ) -> FheOption<FheUsize> {
         match pat.into() {
@@ -1224,9 +1232,9 @@ impl ServerKey {
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
-    pub fn starts_with<'a, P: Into<Pattern<'a>>>(
+    pub fn starts_with<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         pat: P,
     ) -> FheBool {
         match pat.into() {
@@ -1258,7 +1266,7 @@ impl ServerKey {
     /// ```
     #[must_use = "this returns the lowercase string as a new FheString, \
                   without modifying the original"]
-    pub fn to_lowercase(&self, encrypted_str: &FheString) -> FheString {
+    pub fn to_lowercase(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
         FheString::new_unchecked(
             encrypted_str
                 .as_ref()
@@ -1299,7 +1307,7 @@ impl ServerKey {
     /// ```
     #[must_use = "this returns the uppercase string as a new FheString, \
                   without modifying the original"]
-    pub fn to_uppercase(&self, encrypted_str: &FheString) -> FheString {
+    pub fn to_uppercase(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
         FheString::new_unchecked(
             encrypted_str
                 .as_ref()
@@ -1335,7 +1343,11 @@ impl ServerKey {
     /// let s2 = client_key.encrypt_str("world").unwrap();
     /// assert_eq!("helloworld", client_key.decrypt_str(&server_key.concat(&s1, &s2)));
     /// ```
-    pub fn concat(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheString {
+    pub fn concat(
+        &self,
+        encrypted_str: &FheString<Padded>,
+        other_encrypted_str: &FheString<Padded>,
+    ) -> FheString<Padded> {
         let fst = encrypted_str.as_ref();
         let snd = other_encrypted_str.as_ref();
 
@@ -1442,7 +1454,11 @@ impl ServerKey {
     /// ```
     #[inline]
     #[must_use]
-    pub fn ge(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
+    pub fn ge(
+        &self,
+        encrypted_str: &FheString<Padded>,
+        other_encrypted_str: &FheString<Padded>,
+    ) -> FheBool {
         let fst = encrypted_str.as_ref();
         let snd = other_encrypted_str.as_ref();
         match fst.len().cmp(&snd.len()) {
@@ -1522,7 +1538,11 @@ impl ServerKey {
     /// ```
     #[inline]
     #[must_use]
-    pub fn le(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
+    pub fn le(
+        &self,
+        encrypted_str: &FheString<Padded>,
+        other_encrypted_str: &FheString<Padded>,
+    ) -> FheBool {
         let fst = encrypted_str.as_ref();
         let snd = other_encrypted_str.as_ref();
         match fst.len().cmp(&snd.len()) {
@@ -1585,7 +1605,11 @@ impl ServerKey {
     /// ```
     #[inline]
     #[must_use]
-    pub fn ne(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
+    pub fn ne(
+        &self,
+        encrypted_str: &FheString<Padded>,
+        other_encrypted_str: &FheString<Padded>,
+    ) -> FheBool {
         let fst = encrypted_str.as_ref();
         let snd = other_encrypted_str.as_ref();
         match fst.len().cmp(&snd.len()) {
@@ -1659,7 +1683,11 @@ impl ServerKey {
     /// assert!(!client_key.decrypt_bool(&server_key.eq(&s1, &s2)));
     /// ```
     #[must_use]
-    pub fn eq(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
+    pub fn eq(
+        &self,
+        encrypted_str: &FheString<Padded>,
+        other_encrypted_str: &FheString<Padded>,
+    ) -> FheBool {
         let fst = encrypted_str.as_ref();
         let snd = other_encrypted_str.as_ref();
         match fst.len().cmp(&snd.len()) {

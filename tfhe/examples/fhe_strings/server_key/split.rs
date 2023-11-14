@@ -3,7 +3,7 @@ use std::{collections::VecDeque, marker::PhantomData};
 use rayon::prelude::*;
 
 use crate::{
-    ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Pattern},
+    ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Padded, Pattern},
     scan::scan,
 };
 
@@ -104,7 +104,11 @@ impl ServerKey {
     /// assert_eq!(v, ["ghi", "def", "abc"]);
     /// ```
     #[inline]
-    pub fn rsplit<'a>(&self, encrypted_str: &FheString, pat: Pattern<'a>) -> RSplit<'a> {
+    pub fn rsplit<'a>(
+        &self,
+        encrypted_str: &FheString<Padded>,
+        pat: Pattern<'a, Padded>,
+    ) -> RSplit<'a> {
         todo!()
     }
 
@@ -121,8 +125,8 @@ impl ServerKey {
     #[inline]
     pub fn rsplit_once<'a, P>(
         &self,
-        encrypted_str: &FheString,
-        delimiter: Pattern<'a>,
+        encrypted_str: &FheString<Padded>,
+        delimiter: Pattern<'a, Padded>,
     ) -> Option<(&'a str, &'a str)> {
         todo!()
     }
@@ -173,9 +177,9 @@ impl ServerKey {
     #[inline]
     pub fn rsplitn<'a>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         n: usize,
-        pat: Pattern<'a>,
+        pat: Pattern<'a, Padded>,
     ) -> RSplitN<'a> {
         todo!()
     }
@@ -223,8 +227,8 @@ impl ServerKey {
     #[inline]
     pub fn rsplit_terminator<'a>(
         &'a self,
-        encrypted_str: &FheString,
-        pat: Pattern<'a>,
+        encrypted_str: &FheString<Padded>,
+        pat: Pattern<'a, Padded>,
     ) -> RSplitTerminator<'a> {
         todo!()
     }
@@ -366,9 +370,9 @@ impl ServerKey {
     ///
     /// [`split_whitespace`]: ServerKey::split_whitespace
     #[inline]
-    pub fn split<'a, P: Into<Pattern<'a>>>(
+    pub fn split<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         pat: P,
     ) -> FheSplitResult {
         let str_ref = encrypted_str.as_ref();
@@ -564,7 +568,10 @@ impl ServerKey {
     #[must_use = "this returns the split string as an iterator, \
                   without modifying the original"]
     #[inline]
-    pub fn split_ascii_whitespace(&self, encrypted_str: &FheString) -> SplitAsciiWhitespace<'_> {
+    pub fn split_ascii_whitespace(
+        &self,
+        encrypted_str: &FheString<Padded>,
+    ) -> SplitAsciiWhitespace<'_> {
         todo!()
     }
 
@@ -597,9 +604,9 @@ impl ServerKey {
     /// assert_eq!(v, ["Mary had a little lamb\n", "little lamb\n", "little lamb.\n"]);
     /// ```
     #[inline]
-    pub fn split_inclusive<'a, P: Into<Pattern<'a>>>(
+    pub fn split_inclusive<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
-        encrypted_str: &FheString,
+        encrypted_str: &FheString<Padded>,
         pat: P,
     ) -> FheSplitResult {
         let str_ref = encrypted_str.as_ref();
@@ -741,8 +748,8 @@ impl ServerKey {
     #[inline]
     pub fn split_terminator<'a>(
         &'a self,
-        encrypted_str: &FheString,
-        pat: Pattern<'a>,
+        encrypted_str: &FheString<Padded>,
+        pat: Pattern<'a, Padded>,
     ) -> SplitTerminator<'a> {
         todo!()
     }
@@ -794,7 +801,7 @@ impl ServerKey {
     /// assert_eq!(v, ["abc", "defXghi"]);
     /// ```
     #[inline]
-    pub fn splitn<'a>(&self, n: usize, pat: Pattern<'a>) -> SplitN<'a> {
+    pub fn splitn<'a>(&self, n: usize, pat: Pattern<'a, Padded>) -> SplitN<'a> {
         todo!()
     }
 }

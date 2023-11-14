@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::{marker::PhantomData, num::NonZeroUsize};
 
 use tfhe::integer::RadixCiphertext;
 
@@ -30,11 +30,19 @@ impl AsMut<RadixCiphertext> for FheAsciiChar {
     }
 }
 
+#[derive(Clone)]
+pub struct Unpadded;
+#[derive(Clone)]
+pub struct Padded;
+pub trait FheStringPadding {}
+impl FheStringPadding for Unpadded {}
+impl FheStringPadding for Padded {}
+
 /// A FHE wrapper for a string of ASCII characters.
 #[derive(Clone)]
-pub struct FheString(Vec<FheAsciiChar>);
+pub struct FheString<P: FheStringPadding>(Vec<FheAsciiChar>, PhantomData<P>);
 
-impl FheString {
+impl FheString<Padded> {
     pub fn new(
         client_key: &ClientKey,
         s: &str,
@@ -58,39 +66,39 @@ impl FheString {
         for _ in 0..padding_len.get() {
             enc_s.push(client_key.encrypt_byte(0));
         }
-        Ok(Self(enc_s))
+        Ok(Self(enc_s, PhantomData {}))
     }
 
     pub(crate) fn new_unchecked(enc_s: Vec<FheAsciiChar>) -> Self {
-        Self(enc_s)
+        Self(enc_s, PhantomData {})
     }
 }
 
-impl AsRef<[FheAsciiChar]> for FheString {
+impl<P: FheStringPadding> AsRef<[FheAsciiChar]> for FheString<P> {
     fn as_ref(&self) -> &[FheAsciiChar] {
         &self.0
     }
 }
 
-impl AsMut<[FheAsciiChar]> for FheString {
+impl<P: FheStringPadding> AsMut<[FheAsciiChar]> for FheString<P> {
     fn as_mut(&mut self) -> &mut [FheAsciiChar] {
         &mut self.0
     }
 }
 
-pub enum Pattern<'a> {
+pub enum Pattern<'a, P: FheStringPadding> {
     Clear(&'a str),
-    Encrypted(&'a FheString),
+    Encrypted(&'a FheString<P>),
 }
 
-impl<'a> From<&'a str> for Pattern<'a> {
+impl<'a, P: FheStringPadding> From<&'a str> for Pattern<'a, P> {
     fn from(s: &'a str) -> Self {
         Self::Clear(s)
     }
 }
 
-impl<'a> From<&'a FheString> for Pattern<'a> {
-    fn from(s: &'a FheString) -> Self {
+impl<'a, P: FheStringPadding> From<&'a FheString<P>> for Pattern<'a, P> {
+    fn from(s: &'a FheString<P>) -> Self {
         Self::Encrypted(s)
     }
 }

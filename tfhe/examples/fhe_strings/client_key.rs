@@ -7,7 +7,7 @@ use tfhe::{
 };
 
 use crate::{
-    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize},
+    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Padded},
     server_key::{FhePatternLen, FheSplitResult},
 };
 
@@ -51,7 +51,7 @@ impl ClientKey {
         }
     }
 
-    pub fn decrypt_option_str(&self, size: &FheOption<FheString>) -> Option<String> {
+    pub fn decrypt_option_str(&self, size: &FheOption<FheString<Padded>>) -> Option<String> {
         if self.decrypt_bool(&size.0) {
             Some(self.decrypt_str(&size.1))
         } else {
@@ -103,7 +103,7 @@ impl ClientKey {
     pub fn encrypt_str(
         &self,
         s: &str,
-    ) -> Result<FheString, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<FheString<Padded>, Box<dyn std::error::Error + Sync + Send>> {
         FheString::new(self, s)
     }
 
@@ -111,11 +111,11 @@ impl ClientKey {
         &self,
         s: &str,
         padding_len: NonZeroUsize,
-    ) -> Result<FheString, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<FheString<Padded>, Box<dyn std::error::Error + Sync + Send>> {
         FheString::new_with_padding(self, s, padding_len)
     }
 
-    pub fn decrypt_str(&self, s: &FheString) -> String {
+    pub fn decrypt_str(&self, s: &FheString<Padded>) -> String {
         String::from_iter(s.as_ref().iter().map_while(|byte| {
             let b: u64 = self.0.decrypt_radix(byte.as_ref());
             if b > 0 && b < 255 {
