@@ -179,7 +179,7 @@ fn main() -> io::Result<()> {
         info!("`repeat` FHE: {decrypted_repeat_clear} (took {elapsed:?}) (clear number)");
         if !skip_n {
             let now = Instant::now();
-            let repeat = server_key.repeat(&encrypted_str, encrypted_n);
+            let repeat = server_key.repeat(&encrypted_str, encrypted_n.clone());
             let elapsed = now.elapsed();
             let decrypted_repeat_encrypted = client_key.decrypt_str(&repeat);
             info!(
@@ -205,6 +205,48 @@ fn main() -> io::Result<()> {
         info!(
             "`replace` std: {}",
             input_string.replace(pattern, input_string2.as_str())
+        );
+
+        let now = Instant::now();
+        let replacen_clear_clear =
+            server_key.replacen(&encrypted_str, pattern.as_str(), input_string2.as_str(), n);
+        let elapsed = now.elapsed();
+        let decrypted_replacen_clear_clear = client_key.decrypt_str(&replacen_clear_clear);
+        info!("`replacen` FHE: {decrypted_replacen_clear_clear} (took {elapsed:?}) (clear pattern, clear number)");
+        let now = Instant::now();
+        let replacen_clear_encrypted = server_key.replacen(
+            &encrypted_str,
+            pattern.as_str(),
+            input_string2.as_str(),
+            encrypted_n.clone(),
+        );
+        let elapsed = now.elapsed();
+        let decrypted_replacen_clear_encrypted = client_key.decrypt_str(&replacen_clear_encrypted);
+        info!("`replacen` FHE: {decrypted_replacen_clear_encrypted} (took {elapsed:?}) (clear pattern, encrypted number)");
+        let now = Instant::now();
+        let replacen_encrypted_clear =
+            server_key.replacen(&encrypted_str, &encrypted_pattern, &encrypted_str2, n);
+        let elapsed = now.elapsed();
+        let decrypted_replacen_encrypted_clear = client_key.decrypt_str(&replacen_encrypted_clear);
+        info!(
+                    "`replacen` FHE: {decrypted_replacen_encrypted_clear} (took {elapsed:?}) (encrypted pattern, clear number)"
+                );
+        let now = Instant::now();
+        let replacen_encrypted_encrypted = server_key.replacen(
+            &encrypted_str,
+            &encrypted_pattern,
+            &encrypted_str2,
+            encrypted_n,
+        );
+        let elapsed = now.elapsed();
+        let decrypted_replacen_encrypted_encrypted =
+            client_key.decrypt_str(&replacen_encrypted_encrypted);
+        info!(
+                    "`replacen` FHE: {decrypted_replacen_encrypted_encrypted} (took {elapsed:?}) (encrypted pattern, encrypted number)"
+                );
+        info!(
+            "`replacen` std: {}",
+            input_string.replacen(pattern, input_string2.as_str(), n)
         );
 
         let now = Instant::now();
@@ -612,7 +654,72 @@ mod test {
 
     #[test]
     fn test_replacen() {
-        //FIXME
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            ("foo foo 123 foo", vec![("foo", "new", 2), ("o", "a", 3)]),
+            ("this is old", vec![("cookie monster", "little lamb", 10)]),
+        ];
+        for padding_len in 1..=3 {
+            for (input, replacements) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                for (pattern, replacement, n) in replacements {
+                    let encrypted_n = client_key.encrypt_usize(*n);
+                    println!("clear clear: {input} {pattern} {replacement} {padding_len} {n}");
+                    assert_eq!(
+                        input.replacen(pattern, replacement, *n),
+                        client_key.decrypt_str(&server_key.replacen(
+                            &encrypted_str,
+                            *pattern,
+                            *replacement,
+                            *n
+                        ))
+                    );
+                    println!("clear encrypted: {input} {pattern} {replacement} {padding_len} {n}");
+                    assert_eq!(
+                        input.replacen(pattern, replacement, *n),
+                        client_key.decrypt_str(&server_key.replacen(
+                            &encrypted_str,
+                            *pattern,
+                            *replacement,
+                            encrypted_n.clone()
+                        ))
+                    );
+                    let encrypted_pattern = client_key
+                        .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+                        .unwrap();
+                    let encrypted_replacement = client_key
+                        .encrypt_str_padded(replacement, padding_len.try_into().unwrap())
+                        .unwrap();
+                    println!("encrypted clear: {input} {pattern} {replacement} {padding_len} {n}");
+                    assert_eq!(
+                        input.replacen(pattern, replacement, *n),
+                        client_key.decrypt_str(&server_key.replacen(
+                            &encrypted_str,
+                            &encrypted_pattern,
+                            &encrypted_replacement,
+                            *n,
+                        ))
+                    );
+                    println!(
+                        "encrypted encrypted: {input} {pattern} {replacement} {padding_len} {n}"
+                    );
+                    assert_eq!(
+                        input.replacen(pattern, replacement, *n),
+                        client_key.decrypt_str(&server_key.replacen(
+                            &encrypted_str,
+                            *pattern,
+                            *replacement,
+                            encrypted_n
+                        ))
+                    );
+                }
+            }
+        }
     }
 
     #[test]
