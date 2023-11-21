@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, marker::PhantomData};
+use std::collections::VecDeque;
 
 use rayon::prelude::*;
 use tfhe::integer::RadixCiphertext;
@@ -29,6 +29,7 @@ pub enum FheSplitResult {
     RSplitOnce(FhePatternLen, SplitFoundPattern),
     RSplitTerminator(FhePatternLen, SplitFoundPattern),
     Split(FhePatternLen, SplitFoundPattern),
+    SplitAsciiWhitespace(SplitFoundPattern),
     SplitInclusive(SplitFoundPattern),
     SplitN(FhePatternLen, SplitFoundPattern),
     SplitTerminator(FhePatternLen, SplitFoundPattern),
@@ -75,6 +76,7 @@ impl Iterator for FheSplitResult {
         match self {
             FheSplitResult::Split(_, x)
             | FheSplitResult::SplitN(_, x)
+            | FheSplitResult::SplitAsciiWhitespace(x)
             | FheSplitResult::SplitTerminator(_, x)
             | FheSplitResult::SplitInclusive(x)
             | FheSplitResult::RSplit(_, x)
@@ -84,8 +86,6 @@ impl Iterator for FheSplitResult {
         }
     }
 }
-
-pub struct SplitAsciiWhitespace<'a>(PhantomData<&'a ()>);
 
 impl ServerKey {
     #[inline]
@@ -936,9 +936,9 @@ impl ServerKey {
     /// );
     /// ```
     ///
-    /// Use [`split_whitespace`] for this behavior.
+    /// Use [`split_ascii_whitespace`] for this behavior.
     ///
-    /// [`split_whitespace`]: ServerKey::split_whitespace
+    /// [`split_ascii_whitespace`]: ServerKey::split_ascii_whitespace
     #[inline]
     pub fn split<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
@@ -949,55 +949,74 @@ impl ServerKey {
         FheSplitResult::Split(pat_len, pattern_splits)
     }
 
-    /// Splits a string slice by ASCII whitespace.
+    /// Splits `encrypted_str` by ASCII whitespace.
     ///
-    /// The iterator returned will return string slices that are sub-slices of
-    /// the original string slice, separated by any amount of ASCII whitespace.
-    ///
-    /// To split by Unicode `Whitespace` instead, use [`split_whitespace`].
-    ///
-    /// [`split_whitespace`]: str::split_whitespace
+    /// The iterator returned will return encrypted substrings that are sub-slices of
+    /// the original `encrypted_str`, separated by any amount of ASCII whitespace.
     ///
     /// # Examples
     ///
     /// Basic usage:
     ///
     /// ```
-    /// let mut iter = "A few words".split_ascii_whitespace();
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
     ///
-    /// assert_eq!(Some("A"), iter.next());
-    /// assert_eq!(Some("few"), iter.next());
-    /// assert_eq!(Some("words"), iter.next());
-    ///
-    /// assert_eq!(None, iter.next());
+    /// let s = client_key.encrypt_str("A few words").unwrap();
+    /// assert_eq!(
+    ///   client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
+    ///   vec!["A", "few", "words"]
+    /// );
     /// ```
     ///
     /// All kinds of ASCII whitespace are considered:
     ///
     /// ```
-    /// let mut iter = " Mary   had\ta little  \n\t lamb".split_ascii_whitespace();
-    /// assert_eq!(Some("Mary"), iter.next());
-    /// assert_eq!(Some("had"), iter.next());
-    /// assert_eq!(Some("a"), iter.next());
-    /// assert_eq!(Some("little"), iter.next());
-    /// assert_eq!(Some("lamb"), iter.next());
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
     ///
-    /// assert_eq!(None, iter.next());
+    /// let s = client_key.encrypt_str(" Mary   had\ta little  \n\t lamb").unwrap();
+    /// assert_eq!(
+    ///   client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
+    ///   vec!["Mary", "had", "a", "little", "lamb"]
+    /// );
     /// ```
     ///
     /// If the string is empty or all ASCII whitespace, the iterator yields no string slices:
     /// ```
-    /// assert_eq!("".split_ascii_whitespace().next(), None);
-    /// assert_eq!("   ".split_ascii_whitespace().next(), None);
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s = client_key.encrypt_str("").unwrap();
+    /// assert_eq!(
+    ///   client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
+    ///   vec![]
+    /// );
+    /// let s = client_key.encrypt_str("   ").unwrap();
+    /// assert_eq!(
+    ///   client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
+    ///   vec![]
+    /// );
     /// ```
-    #[must_use = "this returns the split string as an iterator, \
+    #[must_use = "this returns the split FheString as an iterator, \
                   without modifying the original"]
     #[inline]
-    pub fn split_ascii_whitespace(
-        &self,
-        encrypted_str: &FheString<Padded>,
-    ) -> SplitAsciiWhitespace<'_> {
-        todo!()
+    pub fn split_ascii_whitespace(&self, encrypted_str: &FheString<Padded>) -> FheSplitResult {
+        let str_ref = encrypted_str.as_ref();
+        let zero = self.false_ct();
+        let mut split_sequence = VecDeque::new();
+        let whitespaces = str_ref.par_iter().map(|x| self.is_whitespace(x));
+        split_sequence.par_extend(whitespaces.zip(str_ref.into_par_iter()).map(|(starts, c)| {
+            let final_c = self
+                .0
+                .if_then_else_parallelized(&starts, &zero, c.as_ref())
+                .into();
+            (starts, final_c)
+        }));
+        FheSplitResult::SplitAsciiWhitespace(split_sequence)
     }
 
     /// An iterator over possible results of encrypted substrings of `encrypted_str`,

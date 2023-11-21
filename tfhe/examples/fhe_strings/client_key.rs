@@ -66,6 +66,7 @@ impl ClientKey {
         });
         let reverse_result = split.reverse_results();
         let skip_terminator = split.skip_empty_terminator();
+        let whitespace_skip = matches!(split, FheSplitResult::SplitAsciiWhitespace(_));
         let mut result = Vec::new();
         let mut current = "".to_string();
         let mut last_found = false;
@@ -79,7 +80,7 @@ impl ClientKey {
                 if char != 0 {
                     current.push(char as u8 as char);
                 }
-                if !current.is_empty() || include_empty.is_some() || i == 0 {
+                if !current.is_empty() || include_empty.is_some() || (i == 0 && !whitespace_skip) {
                     result.push(current.clone());
                     current = "".to_string();
                 }

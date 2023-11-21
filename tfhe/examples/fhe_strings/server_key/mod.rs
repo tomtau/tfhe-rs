@@ -35,7 +35,20 @@ impl From<IntegerServerKey> for ServerKey {
     }
 }
 
+/// 0c == \f == form feed
+/// 0b == \v == vertical tab
+const ASCII_WHITESPACES: [char; 6] = [' ', '\t', '\n', '\r', '\x0c', '\x0b'];
+
 impl ServerKey {
+    #[inline]
+    fn is_whitespace(&self, c: &FheAsciiChar) -> FheBool {
+        ASCII_WHITESPACES
+            .par_iter()
+            .map(|&x| Some(self.0.scalar_eq_parallelized(c.as_ref(), x as u8)))
+            .reduce(|| None, |a, b| self.or(a.as_ref(), b.as_ref()))
+            .unwrap_or_else(|| self.false_ct())
+    }
+
     #[inline]
     fn true_ct(&self) -> FheBool {
         self.0.create_trivial_radix(1, self.1)

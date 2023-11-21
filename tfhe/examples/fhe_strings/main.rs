@@ -11,7 +11,7 @@ use std::{
 use clap::{Arg, ArgAction, Command};
 use env_logger::Env;
 use log::{error, info};
-use tfhe::{integer::gen_keys, shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS};
+use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
 fn main() -> io::Result<()> {
     let env = Env::default().filter_or("RUST_LOG", "info");
@@ -82,9 +82,9 @@ fn main() -> io::Result<()> {
         info!("number: {n}");
         info!("skip_encrypted_number: {skip_n}");
 
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        // let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str = client_key.encrypt_str(&input_string).map_err(|e| {
             error!("Failed to encrypt input string: {e}");
@@ -475,6 +475,17 @@ fn main() -> io::Result<()> {
         );
 
         let now = Instant::now();
+        let split_ascii_whitespace = server_key.split_ascii_whitespace(&encrypted_str);
+        let elapsed = now.elapsed();
+        let decrypted_split_ascii_whitespace_clear =
+            client_key.decrypt_split(split_ascii_whitespace);
+        info!("`split_ascii_whitespace` FHE: {decrypted_split_ascii_whitespace_clear:?} (took {elapsed:?})");
+        info!(
+            "`split_ascii_whitespace` std: {:?}",
+            input_string.split_ascii_whitespace().collect::<Vec<_>>()
+        );
+
+        let now = Instant::now();
         let split_inclusive = server_key.split_inclusive(&encrypted_str, pattern.as_str());
         let elapsed = now.elapsed();
         let decrypted_split_inclusive_clear = client_key.decrypt_split(split_inclusive);
@@ -507,23 +518,23 @@ fn main() -> io::Result<()> {
         let now = Instant::now();
         let splitn = server_key.splitn(&encrypted_str, n, pattern.as_str());
         let elapsed = now.elapsed();
-        let decrypted_split_clear_clear = client_key.decrypt_split(splitn);
-        info!("`splitn` FHE: {decrypted_split_clear_clear:?} (took {elapsed:?}) (clear pattern, clear count)");
+        let decrypted_splitn_clear_clear = client_key.decrypt_split(splitn);
+        info!("`splitn` FHE: {decrypted_splitn_clear_clear:?} (took {elapsed:?}) (clear pattern, clear count)");
         let now = Instant::now();
         let splitn = server_key.splitn(&encrypted_str, encrypted_n.clone(), pattern.as_str());
         let elapsed = now.elapsed();
-        let decrypted_split_clear_encrypted = client_key.decrypt_split(splitn);
-        info!("`splitn` FHE: {decrypted_split_clear_encrypted:?} (took {elapsed:?}) (clear pattern, encrypted count)");
+        let decrypted_splitn_clear_encrypted = client_key.decrypt_split(splitn);
+        info!("`splitn` FHE: {decrypted_splitn_clear_encrypted:?} (took {elapsed:?}) (clear pattern, encrypted count)");
         let now = Instant::now();
         let splitn = server_key.splitn(&encrypted_str, n, &encrypted_pattern);
         let elapsed = now.elapsed();
-        let decrypted_split_encrypted_clear = client_key.decrypt_split(splitn);
-        info!("`splitn` FHE: {decrypted_split_encrypted_clear:?} (took {elapsed:?}) (encrypted pattern, clear count)");
+        let decrypted_splitn_encrypted_clear = client_key.decrypt_split(splitn);
+        info!("`splitn` FHE: {decrypted_splitn_encrypted_clear:?} (took {elapsed:?}) (encrypted pattern, clear count)");
         let now = Instant::now();
         let splitn = server_key.splitn(&encrypted_str, encrypted_n, &encrypted_pattern);
         let elapsed = now.elapsed();
-        let decrypted_split_encrypted_encrypted = client_key.decrypt_split(splitn);
-        info!("`splitn` FHE: {decrypted_split_encrypted_encrypted:?} (took {elapsed:?}) (encrypted pattern, encrypted count)");
+        let decrypted_splitn_encrypted_encrypted = client_key.decrypt_split(splitn);
+        info!("`splitn` FHE: {decrypted_splitn_encrypted_encrypted:?} (took {elapsed:?}) (encrypted pattern, encrypted count)");
         info!(
             "`splitn` std: {:?}",
             input_string.splitn(n, pattern).collect::<Vec<_>>()
@@ -1116,7 +1127,29 @@ mod test {
 
     #[test]
     fn test_split_ascii_whitespace() {
-        //FIXME
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            "A few words",
+            " Mary   had\ta little  \n\t lamb",
+            "",
+            "   ",
+            "    a  b c",
+        ];
+        for padding_len in 1..=3 {
+            for input in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                println!("clear: {input} {padding_len}");
+                assert_eq!(
+                    input.split_ascii_whitespace().collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.split_ascii_whitespace(&encrypted_str))
+                );
+            }
+        }
     }
 
     #[test]
