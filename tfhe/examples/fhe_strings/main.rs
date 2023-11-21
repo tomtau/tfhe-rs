@@ -236,7 +236,7 @@ fn main() -> io::Result<()> {
             &encrypted_str,
             &encrypted_pattern,
             &encrypted_str2,
-            encrypted_n,
+            encrypted_n.clone(),
         );
         let elapsed = now.elapsed();
         let decrypted_replacen_encrypted_encrypted =
@@ -376,6 +376,90 @@ fn main() -> io::Result<()> {
         info!("`trim_start` std: `{}`", input_string.trim_start());
 
         let now = Instant::now();
+        let rsplit = server_key.rsplit(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_clear = client_key.decrypt_split(rsplit);
+        info!("`rsplit` FHE: {decrypted_rsplit_clear:?} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let rsplit = server_key.rsplit(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_encrypted = client_key.decrypt_split(rsplit);
+        info!(
+            "`rsplit` FHE: {decrypted_rsplit_encrypted:?} (took {elapsed:?}) (encrypted pattern)"
+        );
+        info!(
+            "`rsplit` std: {:?}",
+            input_string.rsplit(pattern).collect::<Vec<_>>()
+        );
+
+        let now = Instant::now();
+        let rsplit_once = server_key.rsplit_once(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_once_clear = client_key.decrypt_split(rsplit_once);
+        info!(
+            "`rsplit_once` FHE: {decrypted_rsplit_once_clear:?} (took {elapsed:?}) (clear pattern)"
+        );
+        let now = Instant::now();
+        let rsplit_once = server_key.rsplit_once(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_once_encrypted = client_key.decrypt_split(rsplit_once);
+        info!(
+            "`rsplit_once` FHE: {decrypted_rsplit_once_encrypted:?} (took {elapsed:?}) (encrypted pattern)"
+        );
+        let original_rsplit_once = input_string.rsplit_once(pattern);
+        let transformed_rsplit_once = if let Some((x, y)) = original_rsplit_once {
+            vec![x, y]
+        } else {
+            vec![input_string.as_str()]
+        };
+        info!(
+            "`rsplit_once` std: {:?} (original: {:?})",
+            transformed_rsplit_once, original_rsplit_once
+        );
+
+        let now = Instant::now();
+        let rsplitn = server_key.rsplitn(&encrypted_str, n, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_clear_clear = client_key.decrypt_split(rsplitn);
+        info!("`rsplitn` FHE: {decrypted_rsplit_clear_clear:?} (took {elapsed:?}) (clear pattern, clear count)");
+        let now = Instant::now();
+        let rsplitn = server_key.rsplitn(&encrypted_str, encrypted_n.clone(), pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_clear_encrypted = client_key.decrypt_split(rsplitn);
+        info!("`rsplitn` FHE: {decrypted_rsplit_clear_encrypted:?} (took {elapsed:?}) (clear pattern, encrypted count)");
+        let now = Instant::now();
+        let rsplitn = server_key.rsplitn(&encrypted_str, n, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_encrypted_clear = client_key.decrypt_split(rsplitn);
+        info!("`rsplitn` FHE: {decrypted_rsplit_encrypted_clear:?} (took {elapsed:?}) (encrypted pattern, clear count)");
+        let now = Instant::now();
+        let rsplitn = server_key.rsplitn(&encrypted_str, encrypted_n.clone(), &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_encrypted_encrypted = client_key.decrypt_split(rsplitn);
+        info!("`rsplitn` FHE: {decrypted_rsplit_encrypted_encrypted:?} (took {elapsed:?}) (encrypted pattern, encrypted count)");
+        info!(
+            "`rsplitn` std: {:?}",
+            input_string.rsplitn(n, pattern).collect::<Vec<_>>()
+        );
+
+        let now = Instant::now();
+        let rsplit_terminator = server_key.rsplit_terminator(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_terminator_clear = client_key.decrypt_split(rsplit_terminator);
+        info!("`rsplit_terminator` FHE: {decrypted_rsplit_terminator_clear:?} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let rsplit_terminator = server_key.rsplit_terminator(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_rsplit_terminator_encrypted = client_key.decrypt_split(rsplit_terminator);
+        info!(
+            "`rsplit_terminator` FHE: {decrypted_rsplit_terminator_encrypted:?} (took {elapsed:?}) (encrypted pattern)"
+        );
+        info!(
+            "`rsplit_terminator` std: {:?}",
+            input_string.rsplit_terminator(pattern).collect::<Vec<_>>()
+        );
+
+        let now = Instant::now();
         let split = server_key.split(&encrypted_str, pattern.as_str());
         let elapsed = now.elapsed();
         let decrypted_split_clear = client_key.decrypt_split(split);
@@ -403,6 +487,46 @@ fn main() -> io::Result<()> {
         info!(
             "`split_inclusive` std: {:?}",
             input_string.split_inclusive(pattern).collect::<Vec<_>>()
+        );
+
+        let now = Instant::now();
+        let split_terminator = server_key.split_terminator(&encrypted_str, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_split_terminator_clear = client_key.decrypt_split(split_terminator);
+        info!("`split_terminator` FHE: {decrypted_split_terminator_clear:?} (took {elapsed:?}) (clear pattern)");
+        let now = Instant::now();
+        let split_terminator = server_key.split_terminator(&encrypted_str, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_split_terminator_encrypted = client_key.decrypt_split(split_terminator);
+        info!("`split_terminator` FHE: {decrypted_split_terminator_encrypted:?} (took {elapsed:?}) (encrypted pattern)");
+        info!(
+            "`split_terminator` std: {:?}",
+            input_string.split_terminator(pattern).collect::<Vec<_>>()
+        );
+
+        let now = Instant::now();
+        let splitn = server_key.splitn(&encrypted_str, n, pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_split_clear_clear = client_key.decrypt_split(splitn);
+        info!("`splitn` FHE: {decrypted_split_clear_clear:?} (took {elapsed:?}) (clear pattern, clear count)");
+        let now = Instant::now();
+        let splitn = server_key.splitn(&encrypted_str, encrypted_n.clone(), pattern.as_str());
+        let elapsed = now.elapsed();
+        let decrypted_split_clear_encrypted = client_key.decrypt_split(splitn);
+        info!("`splitn` FHE: {decrypted_split_clear_encrypted:?} (took {elapsed:?}) (clear pattern, encrypted count)");
+        let now = Instant::now();
+        let splitn = server_key.splitn(&encrypted_str, n, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_split_encrypted_clear = client_key.decrypt_split(splitn);
+        info!("`splitn` FHE: {decrypted_split_encrypted_clear:?} (took {elapsed:?}) (encrypted pattern, clear count)");
+        let now = Instant::now();
+        let splitn = server_key.splitn(&encrypted_str, encrypted_n, &encrypted_pattern);
+        let elapsed = now.elapsed();
+        let decrypted_split_encrypted_encrypted = client_key.decrypt_split(splitn);
+        info!("`splitn` FHE: {decrypted_split_encrypted_encrypted:?} (took {elapsed:?}) (encrypted pattern, encrypted count)");
+        info!(
+            "`splitn` std: {:?}",
+            input_string.splitn(n, pattern).collect::<Vec<_>>()
         );
 
         Ok(())
@@ -753,22 +877,197 @@ mod test {
 
     #[test]
     fn test_rsplit() {
-        //FIXME
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            ("Mary had a little lamb", " "),
+            ("", "X"),
+            ("lionXXtigerXleo", "X"),
+            ("lion::tiger::leo", "::"),
+            ("||||a||b|c", "|"),
+            ("(///)", "/"),
+            ("010", "0"),
+            ("rust", ""),
+            ("    a  b c", " "),
+            ("banana", "ana"),
+            ("foo:bar", "foo:"),
+            ("foo:bar", "bar"),
+        ];
+        for padding_len in 1..=3 {
+            for (input, split_pattern) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                let encrypted_split_pattern = client_key
+                    .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                println!("clear: {input} {split_pattern} {padding_len}");
+                assert_eq!(
+                    input.rsplit(split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.rsplit(&encrypted_str, *split_pattern))
+                );
+                println!("encrypted: {input} {split_pattern} {padding_len}");
+
+                assert_eq!(
+                    input.rsplit(split_pattern).collect::<Vec<_>>(),
+                    client_key
+                        .decrypt_split(server_key.rsplit(&encrypted_str, &encrypted_split_pattern))
+                );
+            }
+        }
     }
 
     #[test]
     fn test_rsplit_once() {
-        //FIXME
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [(vec!["cfg", "cfg=foo", "cfg=foo=bar"], "=")];
+        for padding_len in 1..=3 {
+            for (input_strs, split_pattern) in &inputs {
+                let encrypted_split_pattern = client_key
+                    .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                for input in input_strs {
+                    let encrypted_str = client_key
+                        .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                        .unwrap();
+                    let rsplit_once = input.rsplit_once(split_pattern);
+                    let expected = if let Some((x, y)) = rsplit_once {
+                        vec![x, y]
+                    } else {
+                        vec![*input]
+                    };
+                    println!("clear: {input} {split_pattern} {padding_len}");
+                    assert_eq!(
+                        expected,
+                        client_key
+                            .decrypt_split(server_key.rsplit_once(&encrypted_str, *split_pattern))
+                    );
+                    println!("encrypted: {input} {split_pattern} {padding_len}");
+
+                    assert_eq!(
+                        expected,
+                        client_key.decrypt_split(
+                            server_key.rsplit_once(&encrypted_str, &encrypted_split_pattern)
+                        )
+                    );
+                }
+            }
+        }
     }
 
     #[test]
     fn test_rsplitn() {
-        //FIXME
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            ("Mary had a little lamb", 3, " "),
+            ("", 3, "X"),
+            ("lionXXtigerXleopard", 3, "X"),
+            ("lion::tiger::leopard", 2, "::"),
+        ];
+        for padding_len in 1..=3 {
+            for (input, n, split_pattern) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                let encrypted_split_pattern = client_key
+                    .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                let encrypted_n = client_key.encrypt_usize(*n);
+                println!("clear clear: {input} {split_pattern} {padding_len} {n}");
+                assert_eq!(
+                    input.rsplitn(*n, split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.rsplitn(
+                        &encrypted_str,
+                        *n,
+                        *split_pattern
+                    ))
+                );
+                println!("clear encrypted: {input} {split_pattern} {padding_len} {n}");
+                assert_eq!(
+                    input.rsplitn(*n, split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.rsplitn(
+                        &encrypted_str,
+                        encrypted_n.clone(),
+                        *split_pattern
+                    ))
+                );
+                println!("encrypted clear: {input} {split_pattern} {padding_len} {n}");
+                assert_eq!(
+                    input.rsplitn(*n, split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.rsplitn(
+                        &encrypted_str,
+                        *n,
+                        &encrypted_split_pattern
+                    ))
+                );
+                println!("encrypted encrypted: {input} {split_pattern} {padding_len} {n}");
+                assert_eq!(
+                    input.rsplitn(*n, split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.rsplitn(
+                        &encrypted_str,
+                        encrypted_n,
+                        &encrypted_split_pattern
+                    ))
+                );
+            }
+        }
     }
 
     #[test]
     fn test_rsplit_terminator() {
-        //FIXME
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            ("Mary had a little lamb", " "),
+            ("", "X"),
+            ("lionXXtigerXleo", "X"),
+            ("lion::tiger::leo", "::"),
+            ("||||a||b|c", "|"),
+            ("(///)", "/"),
+            ("010", "0"),
+            ("rust", ""),
+            ("    a  b c", " "),
+            ("banana", "ana"),
+            ("foo:bar", "foo:"),
+            ("foo:bar", "bar"),
+            ("A.B.", "."),
+            ("A..B..", "."),
+        ];
+        for padding_len in 1..=3 {
+            for (input, split_pattern) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                let encrypted_split_pattern = client_key
+                    .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                println!("clear: {input} {split_pattern} {padding_len}");
+                assert_eq!(
+                    input.rsplit_terminator(split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(
+                        server_key.rsplit_terminator(&encrypted_str, *split_pattern)
+                    )
+                );
+                println!("encrypted: {input} {split_pattern} {padding_len}");
+
+                assert_eq!(
+                    input.rsplit_terminator(split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(
+                        server_key.rsplit_terminator(&encrypted_str, &encrypted_split_pattern)
+                    )
+                );
+            }
+        }
     }
 
     #[test]
@@ -866,12 +1165,107 @@ mod test {
 
     #[test]
     fn test_split_terminator() {
-        //FIXME
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            ("Mary had a little lamb", " "),
+            ("", "X"),
+            ("lionXXtigerXleo", "X"),
+            ("lion::tiger::leo", "::"),
+            ("||||a||b|c", "|"),
+            ("(///)", "/"),
+            ("010", "0"),
+            ("rust", ""),
+            ("    a  b c", " "),
+            ("banana", "ana"),
+            ("foo:bar", "foo:"),
+            ("foo:bar", "bar"),
+            ("A.B.", "."),
+            ("A..B..", "."),
+        ];
+        for padding_len in 1..=3 {
+            for (input, split_pattern) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                let encrypted_split_pattern = client_key
+                    .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                println!("clear: {input} {split_pattern} {padding_len}");
+                assert_eq!(
+                    input.split_terminator(split_pattern).collect::<Vec<_>>(),
+                    client_key
+                        .decrypt_split(server_key.split_terminator(&encrypted_str, *split_pattern))
+                );
+                println!("encrypted: {input} {split_pattern} {padding_len}");
+
+                assert_eq!(
+                    input.split_terminator(split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(
+                        server_key.split_terminator(&encrypted_str, &encrypted_split_pattern)
+                    )
+                );
+            }
+        }
     }
 
     #[test]
     fn test_splitn() {
-        //FIXME
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let inputs = [
+            ("Mary had a little lamb", 3, " "),
+            ("", 3, "X"),
+            ("lionXXtigerXleopard", 1, "X"),
+            ("abcXdef", 1, "X"),
+        ];
+        for padding_len in 1..=3 {
+            for (input, n, split_pattern) in &inputs {
+                let encrypted_str = client_key
+                    .encrypt_str_padded(input, padding_len.try_into().unwrap())
+                    .unwrap();
+                let encrypted_split_pattern = client_key
+                    .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+                    .unwrap();
+                let encrypted_n = client_key.encrypt_usize(*n);
+                println!("clear clear: {input} {split_pattern} {padding_len} {n}");
+                assert_eq!(
+                    input.splitn(*n, split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.splitn(&encrypted_str, *n, *split_pattern))
+                );
+                println!("clear encrypted: {input} {split_pattern} {padding_len} {n}");
+                assert_eq!(
+                    input.splitn(*n, split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.splitn(
+                        &encrypted_str,
+                        encrypted_n.clone(),
+                        *split_pattern
+                    ))
+                );
+                println!("encrypted clear: {input} {split_pattern} {padding_len} {n}");
+                assert_eq!(
+                    input.splitn(*n, split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.splitn(
+                        &encrypted_str,
+                        *n,
+                        &encrypted_split_pattern
+                    ))
+                );
+                println!("encrypted encrypted: {input} {split_pattern} {padding_len} {n}");
+                assert_eq!(
+                    input.splitn(*n, split_pattern).collect::<Vec<_>>(),
+                    client_key.decrypt_split(server_key.splitn(
+                        &encrypted_str,
+                        encrypted_n,
+                        &encrypted_split_pattern
+                    ))
+                );
+            }
+        }
     }
 
     #[test]

@@ -64,7 +64,8 @@ impl ClientKey {
             FhePatternLen::Plain(y) => *y,
             FhePatternLen::Encrypted(y) => self.decrypt_usize(y),
         });
-
+        let reverse_result = split.reverse_results();
+        let skip_terminator = split.skip_empty_terminator();
         let mut result = Vec::new();
         let mut current = "".to_string();
         let mut last_found = false;
@@ -96,7 +97,12 @@ impl ClientKey {
         {
             result.push(current);
         }
-
+        if skip_terminator && result.last().map(|x| x.is_empty()).unwrap_or(false) {
+            result.pop();
+        }
+        if reverse_result {
+            result.reverse();
+        }
         result
     }
 
