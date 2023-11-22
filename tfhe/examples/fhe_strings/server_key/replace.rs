@@ -599,3 +599,141 @@ impl ServerKey {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use test_case::test_matrix;
+    use tfhe::{integer::gen_keys, shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS};
+
+    use crate::{client_key, server_key};
+
+    #[inline]
+    fn replace_test(input: &str, (pattern, replacement): (&str, &str), padding_len: usize) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let encrypted_str = client_key
+            .encrypt_str_padded(input, padding_len.try_into().unwrap())
+            .unwrap();
+        println!("clear: {input} {pattern} {replacement} {padding_len}");
+
+        assert_eq!(
+            input.replace(pattern, replacement),
+            client_key.decrypt_str(&server_key.replace(&encrypted_str, pattern, replacement))
+        );
+        let encrypted_pattern = client_key
+            .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+            .unwrap();
+        let encrypted_replacement = client_key
+            .encrypt_str_padded(replacement, padding_len.try_into().unwrap())
+            .unwrap();
+        println!("encrypted: {input} {pattern} {replacement} {padding_len}");
+        assert_eq!(
+            input.replace(pattern, replacement),
+            client_key.decrypt_str(&server_key.replace(
+                &encrypted_str,
+                &encrypted_pattern,
+                &encrypted_replacement
+            ))
+        );
+    }
+
+    #[test_matrix(
+        ["this is old"],
+        [("old","new"), ("is", "an"), ("x", "y")],
+        1..=3
+    )]
+    fn test_replace(input: &str, (pattern, replacement): (&str, &str), padding_len: usize) {
+        replace_test(input, (pattern, replacement), padding_len);
+    }
+
+    #[test_matrix(
+        ["aaabaaab"],
+        [("a", "c"), ("aa", "c"), ("aa", "cc"), ("aaa", "c")],
+        1..=3
+    )]
+    fn test_replace_shrink(input: &str, (pattern, replacement): (&str, &str), padding_len: usize) {
+        replace_test(input, (pattern, replacement), padding_len);
+    }
+
+    #[test_matrix(
+        ["cabcab"],
+        [("c", "aa"), ("cab", "")],
+        1..=3
+    )]
+    fn test_replace_expand(input: &str, (pattern, replacement): (&str, &str), padding_len: usize) {
+        replace_test(input, (pattern, replacement), padding_len);
+    }
+
+    #[test_matrix(
+        ["banana"],
+        [("ana", "anas")],
+        1..=3
+    )]
+    fn test_replace_multi(input: &str, (pattern, replacement): (&str, &str), padding_len: usize) {
+        replace_test(input, (pattern, replacement), padding_len);
+    }
+
+    #[test_matrix(
+        ["foo foo 123 foo", "this is old"],
+        [("foo", "new"), ("o", "a"), ("cookie monster", "little lambda")],
+        [2, 3, 10],
+        1..=3
+    )]
+    fn test_replacen(
+        input: &str,
+        (pattern, replacement): (&str, &str),
+        n: usize,
+        padding_len: usize,
+    ) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let encrypted_str = client_key
+            .encrypt_str_padded(input, padding_len.try_into().unwrap())
+            .unwrap();
+        let encrypted_n = client_key.encrypt_usize(n);
+        println!("clear clear: {input} {pattern} {replacement} {padding_len} {n}");
+        assert_eq!(
+            input.replacen(pattern, replacement, n),
+            client_key.decrypt_str(&server_key.replacen(&encrypted_str, pattern, replacement, n))
+        );
+        println!("clear encrypted: {input} {pattern} {replacement} {padding_len} {n}");
+        assert_eq!(
+            input.replacen(pattern, replacement, n),
+            client_key.decrypt_str(&server_key.replacen(
+                &encrypted_str,
+                pattern,
+                replacement,
+                encrypted_n.clone()
+            ))
+        );
+        let encrypted_pattern = client_key
+            .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
+            .unwrap();
+        let encrypted_replacement = client_key
+            .encrypt_str_padded(replacement, padding_len.try_into().unwrap())
+            .unwrap();
+        println!("encrypted clear: {input} {pattern} {replacement} {padding_len} {n}");
+        assert_eq!(
+            input.replacen(pattern, replacement, n),
+            client_key.decrypt_str(&server_key.replacen(
+                &encrypted_str,
+                &encrypted_pattern,
+                &encrypted_replacement,
+                n,
+            ))
+        );
+        println!("encrypted encrypted: {input} {pattern} {replacement} {padding_len} {n}");
+        assert_eq!(
+            input.replacen(pattern, replacement, n),
+            client_key.decrypt_str(&server_key.replacen(
+                &encrypted_str,
+                pattern,
+                replacement,
+                encrypted_n
+            ))
+        );
+    }
+}

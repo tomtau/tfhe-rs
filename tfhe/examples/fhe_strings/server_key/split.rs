@@ -1,3 +1,13 @@
+mod rsplit;
+mod rsplit_once;
+mod rsplit_terminator;
+mod rsplitn;
+mod split;
+mod split_ascii_whitespace;
+mod split_inclusive;
+mod split_terminator;
+mod splitn;
+
 use std::collections::VecDeque;
 
 use rayon::prelude::*;

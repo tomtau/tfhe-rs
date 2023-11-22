@@ -1,4 +1,11 @@
+mod comparison;
+mod concat;
+mod conversion;
+mod is_empty;
+mod len;
+mod repeat;
 mod replace;
+mod search;
 mod split;
 mod trim;
 
