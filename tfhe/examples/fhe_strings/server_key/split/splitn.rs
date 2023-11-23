@@ -5,14 +5,8 @@ mod test {
 
     use crate::{client_key, server_key};
 
-    #[test_matrix(
-        [("Mary had a little lamb", 3, " "),
-        ("", 3, "X"),
-        ("lionXXtigerXleopard", 1, "X"),
-        ("abcXdef", 1, "X"),],
-        1..=3
-    )]
-    fn test_splitn((input, n, split_pattern): (&str, usize, &str), padding_len: usize) {
+    #[inline]
+    fn splitn_test((input, n, split_pattern): (&str, usize, &str), padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
@@ -56,5 +50,25 @@ mod test {
                 &encrypted_split_pattern
             ))
         );
+    }
+
+    #[test_matrix(
+        [("Mary had a little lamb", 3, " "),
+        ("", 3, "X"),
+        ("lionXXtigerXleopard", 1, "X"),
+        ("abcXdef", 1, "X"),],
+        1..=3
+    )]
+    fn test_splitn((input, n, split_pattern): (&str, usize, &str), padding_len: usize) {
+        splitn_test((input, n, split_pattern), padding_len)
+    }
+
+    #[test_matrix(
+        ["rust", ""],
+        0..=3,
+        1..=3
+    )]
+    fn test_splitn_empty(input: &str, n: usize, padding_len: usize) {
+        splitn_test((input, n, ""), padding_len)
     }
 }

@@ -60,6 +60,13 @@ impl ClientKey {
     }
 
     pub fn decrypt_split(&self, split: FheSplitResult) -> Vec<String> {
+        let zero_count = split
+            .zero_count()
+            .map(|x| self.decrypt_bool(x))
+            .unwrap_or(false);
+        if zero_count {
+            return vec![];
+        }
         let include_empty = split.include_empty_matches().map(|x| match x {
             FhePatternLen::Plain(y) => *y,
             FhePatternLen::Encrypted(y) => self.decrypt_usize(y),
@@ -71,9 +78,11 @@ impl ClientKey {
         let mut current = "".to_string();
         let mut last_found = false;
         let mut split_iter = split.into_iter().enumerate();
+        let mut any_non_zero = false;
         while let Some((i, (found, char))) = split_iter.next() {
             let char: u64 = self.0.decrypt_radix(char.as_ref());
             let found_dec = self.decrypt_bool(&found);
+            any_non_zero |= char != 0;
             last_found = found_dec || (char == 0 && last_found);
 
             if found_dec {
@@ -93,7 +102,7 @@ impl ClientKey {
                 current.push(char as u8 as char);
             }
         }
-        if ((last_found || result.is_empty()) && matches!(include_empty, Some(l) if l > 0))
+        if (((last_found && any_non_zero) || result.is_empty()) && matches!(include_empty, Some(l) if l > 0))
             || !current.is_empty()
         {
             result.push(current);

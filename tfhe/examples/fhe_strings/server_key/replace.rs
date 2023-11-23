@@ -94,7 +94,12 @@ impl ServerKey {
                             Some(self.0.scalar_le_parallelized(&count, *mc as u64))
                         }
                         (Some(count), Some(Number::Encrypted(mc))) => {
-                            Some(self.0.le_parallelized(&count, mc))
+                            let count_not_reached = self.0.le_parallelized(&count, mc);
+                            let max_count_gt_zero = self.0.scalar_gt_parallelized(mc, 0 as u64);
+                            Some(
+                                self.0
+                                    .bitand_parallelized(&count_not_reached, &max_count_gt_zero),
+                            )
                         }
                         _ => None,
                     },
@@ -127,6 +132,14 @@ impl ServerKey {
         to_pat: &str,
         max_count: Option<Number>,
     ) -> FheString<Padded> {
+        if let Some(Number::Clear(0)) = max_count {
+            return FheString::new_unchecked(str_ref.to_vec());
+        }
+        let gt_than_zero = if let Some(Number::Encrypted(n)) = max_count.as_ref() {
+            Some(self.0.scalar_gt_parallelized(n, 0))
+        } else {
+            None
+        };
         let max_len = if from_pat.len() > to_pat.len() {
             str_ref.len()
         } else {
@@ -143,7 +156,10 @@ impl ServerKey {
             .collect();
         let pattern_starts = (0..str_ref.len()).into_par_iter().map(|i| {
             let window = &str_ref[i..std::cmp::min(str_ref.len(), i + from_pat.len())];
-            let starts = self.starts_with_clear_par(window, from_pat);
+            let mut starts = self.starts_with_clear_par(window, from_pat);
+            if let Some(gt_z) = gt_than_zero.as_ref() {
+                self.0.bitand_assign_parallelized(&mut starts, gt_z);
+            }
             Some((
                 self.0
                     .scalar_mul_parallelized(&starts, from_pat.len() as u64),
@@ -236,9 +252,10 @@ impl ServerKey {
                 .into_par_iter()
                 .map(|i| self.find_shifted_index_char(i, str_ref, &shifted_indices)),
         );
+        // TODO: can this be parallelized?
         for i in 0..max_len - 1 {
             let (to_fill, remaining_pat) = rayon::join(
-                || self.0.scalar_eq_parallelized(result[i].as_ref(), 0 as u64),
+                || self.0.scalar_eq_parallelized(result[i].as_ref(), 0u64),
                 || self.0.scalar_gt_parallelized(&pattern_found_count, 0),
             );
             let cond = self.0.bitand_parallelized(&to_fill, &remaining_pat);
@@ -254,20 +271,73 @@ impl ServerKey {
             self.0
                 .sub_assign_parallelized(&mut pattern_found_count, &cond);
         }
+        // TODO: extract to an optimized function to handle just this case?
+        if from_pat.is_empty() {
+            let zero = self.false_ct();
+            let mut str_ref_empty = self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64);
+            if let Some(gtz) = gt_than_zero {
+                self.0.bitand_assign_parallelized(&mut str_ref_empty, &gtz);
+            }
+            for i in 0..result.len() {
+                if i < to_pat_enc.len() {
+                    result[i] = self
+                        .0
+                        .if_then_else_parallelized(&str_ref_empty, &to_pat_enc[i], result[i].as_ref())
+                        .into();
+                } else {
+                    result[i] = self
+                        .0
+                        .if_then_else_parallelized(&str_ref_empty, &zero, result[i].as_ref())
+                        .into();
+                }
+            }
+        }
         FheString::new_unchecked(result)
     }
 
     #[inline]
     fn replace_pat_encrypted(
         &self,
-        str_ref: &[FheAsciiChar],
+        encrypted_str: &FheString<Padded>,
         from_pat: &FheString<Padded>,
         to_pat: &FheString<Padded>,
         max_count: Option<Number>,
     ) -> FheString<Padded> {
+        if let Some(Number::Clear(0)) = max_count {
+            return encrypted_str.clone();
+        }
+        let (str_ref_empty, from_pat_empty) =
+            rayon::join(|| self.is_empty(encrypted_str), || self.is_empty(from_pat));
+        let mut end_empty_match = self.0.bitand_parallelized(&str_ref_empty, &from_pat_empty);
+        let str_ref = encrypted_str.as_ref();
+        let gt_than_zero = if let Some(Number::Encrypted(n)) = max_count.as_ref() {
+            let gt_than_zero = self.0.scalar_gt_parallelized(n, 0);
+            self.0
+                .bitand_assign_parallelized(&mut end_empty_match, &gt_than_zero);
+            Some(gt_than_zero)
+        } else {
+            None
+        };
+        let adjusted_max_count = match max_count {
+            Some(Number::Clear(mc)) => {
+                let enc_mc = self.0.create_trivial_radix(mc as u64, self.1);
+                self.0
+                    .if_then_else_parallelized(&str_ref_empty, &self.true_ct(), &enc_mc)
+            }
+            Some(Number::Encrypted(mc)) => {
+                self.0
+                    .if_then_else_parallelized(&str_ref_empty, &self.true_ct(), &mc)
+            }
+            None => {
+                let enc_mc = self.0.create_trivial_radix(u64::MAX, self.1);
+                self.0
+                    .if_then_else_parallelized(&str_ref_empty, &self.true_ct(), &enc_mc)
+            }
+        };
+
         let from_pat_ref = from_pat.as_ref();
         let to_pat_ref = to_pat.as_ref();
-        let max_len = (str_ref.len() - 1) * to_pat_ref.len() + 1;
+        let max_len = str_ref.len() * to_pat_ref.len() + 1;
         let mut result = Vec::with_capacity(max_len);
 
         let ((from_pat_len, to_pat_len), to_pat_notzeroes) = rayon::join(
@@ -283,10 +353,13 @@ impl ServerKey {
         let (pattern_starts, (from_pat_gt, shrink_shift_len, grow_shift_len)) = rayon::join(
             || {
                 (0..str_ref.len()).into_par_iter().map(|i| {
-                    let (starts, not_ended) = rayon::join(
+                    let (mut starts, not_ended) = rayon::join(
                         || self.starts_with_encrypted_par(&str_ref[i..], from_pat_ref),
                         || self.0.scalar_ne_parallelized(str_ref[i].as_ref(), 0),
                     );
+                    if let Some(gt_z) = gt_than_zero.as_ref() {
+                        self.0.bitand_assign_parallelized(&mut starts, gt_z);
+                    }
                     Some((
                         self.0.mul_parallelized(&starts, &from_pat_len),
                         starts,
@@ -319,32 +392,15 @@ impl ServerKey {
                     let mut start_y_not_ended =
                         self.0.bitand_parallelized(&next_pattern, not_ended_y);
 
-                    match max_count.as_ref() {
-                        Some(Number::Clear(count)) => {
-                            let (min_next_count, not_reached_max_count) = rayon::join(
-                                || self.0.scalar_min_parallelized(&next_count, *count as u64),
-                                || self.0.scalar_le_parallelized(&next_count, *count as u64),
-                            );
-                            next_count = min_next_count;
-                            self.0.bitand_assign_parallelized(
-                                &mut start_y_not_ended,
-                                &not_reached_max_count,
-                            );
-                        }
-                        Some(Number::Encrypted(count)) => {
-                            let (min_next_count, not_reached_max_count) = rayon::join(
-                                || self.0.min_parallelized(&next_count, count),
-                                || self.0.le_parallelized(&next_count, count),
-                            );
-                            next_count = min_next_count;
+                    let (min_next_count, not_reached_max_count) = rayon::join(
+                        || self.0.min_parallelized(&next_count, &adjusted_max_count),
+                        || self.0.le_parallelized(&next_count, &adjusted_max_count),
+                    );
+                    next_count = min_next_count;
 
-                            self.0.bitand_assign_parallelized(
-                                &mut start_y_not_ended,
-                                &not_reached_max_count,
-                            );
-                        }
-                        _ => {}
-                    }
+                    self.0
+                        .bitand_assign_parallelized(&mut start_y_not_ended, &not_reached_max_count);
+
                     let next_start_y = self.0.if_then_else_parallelized(
                         &start_y_not_ended,
                         &start_y,
@@ -498,7 +554,7 @@ impl ServerKey {
                 self.replace_diff_len_pat_clear(str_ref, from_pat, to_pat, None)
             }
             (Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat)) => {
-                self.replace_pat_encrypted(str_ref, from_pat, to_pat, None)
+                self.replace_pat_encrypted(encrypted_str, from_pat, to_pat, None)
             }
             _ => {
                 // since both `from` and `to` need to be `P`
@@ -566,11 +622,12 @@ impl ServerKey {
     ) -> FheString<Padded> {
         let str_ref = encrypted_str.as_ref();
         match (from.into(), to.into(), count.into()) {
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), Number::Clear(count))
-                if (from_pat.is_empty() && to_pat.is_empty()) || count == 0 =>
+            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), _)
+                if (from_pat.is_empty() && to_pat.is_empty()) =>
             {
                 encrypted_str.clone()
             }
+            (_, _, Number::Clear(0)) => encrypted_str.clone(),
             // TODO: CLear/Clear/Encrypted works via replace_diff_len_pat_clear, but may can be made more efficient?
             (Pattern::Clear(from_pat), Pattern::Clear(to_pat), Number::Clear(count))
                 if from_pat.is_empty() =>
@@ -586,7 +643,7 @@ impl ServerKey {
                 self.replace_diff_len_pat_clear(str_ref, from_pat, to_pat, Some(n))
             }
             (Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat), n) => {
-                self.replace_pat_encrypted(str_ref, from_pat, to_pat, Some(n))
+                self.replace_pat_encrypted(encrypted_str, from_pat, to_pat, Some(n))
             }
             (Pattern::Clear(_), Pattern::Encrypted(_), _) => {
                 // since both `from` and `to` need to be `P`
@@ -675,12 +732,16 @@ mod test {
     }
 
     #[test_matrix(
-        ["foo foo 123 foo", "this is old"],
-        [("foo", "new"), ("o", "a"), ("cookie monster", "little lambda")],
-        [2, 3, 10],
+        [""],
+        [("", "x"), ("a", "")],
         1..=3
     )]
-    fn test_replacen(
+    fn test_replace_empty(input: &str, (pattern, replacement): (&str, &str), padding_len: usize) {
+        replace_test(input, (pattern, replacement), padding_len);
+    }
+
+    #[inline]
+    fn replacen_test(
         input: &str,
         (pattern, replacement): (&str, &str),
         n: usize,
@@ -730,10 +791,41 @@ mod test {
             input.replacen(pattern, replacement, n),
             client_key.decrypt_str(&server_key.replacen(
                 &encrypted_str,
-                pattern,
-                replacement,
+                &encrypted_pattern,
+                &encrypted_replacement,
                 encrypted_n
             ))
         );
+    }
+
+    #[test_matrix(
+        ["foo foo 123 foo", "this is old"],
+        [("foo", "new"), ("o", "a"), ("cookie monster", "little lambda")],
+        [2, 3, 10],
+        1..=3
+    )]
+    fn test_replacen(
+        input: &str,
+        (pattern, replacement): (&str, &str),
+        n: usize,
+        padding_len: usize,
+    ) {
+        replacen_test(input, (pattern, replacement), n, padding_len)
+    }
+
+    #[test_matrix(
+        ["rust", ""],
+        [("", "r")],
+        0..=3,
+        1..=3
+    )]
+    fn test_replacen_empty(
+        input: &str,
+        (pattern, replacement): (&str, &str),
+        n: usize,
+        padding_len: usize,
+    ) {
+        replacen_test(input, (pattern, replacement), n, padding_len);
+        replacen_test(input, (replacement, pattern), n, padding_len)
     }
 }
