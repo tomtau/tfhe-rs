@@ -35,7 +35,7 @@ where
     offsets
 }
 
-/******* scan part 1: consumer ******/
+/******* scan part 1: consumer ***** */
 
 // Breaks the iterator into pieces and performs sequential scan on each
 // Returns intermediate data, a LinkedList of the result of each seq scan
@@ -146,7 +146,7 @@ impl<T> Reducer<LinkedList<T>> for ScanP1Reducer {
     }
 }
 
-/*********** scan part 2: producer **********/
+/*********** scan part 2: producer ********* */
 
 #[derive(Debug)]
 pub struct Scan<T, P> {

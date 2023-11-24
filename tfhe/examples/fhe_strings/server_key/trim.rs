@@ -7,10 +7,8 @@ use dashmap::DashMap;
 use rayon::prelude::*;
 use tfhe::integer::RadixCiphertext;
 
-use crate::{
-    ciphertext::{FheBool, FheOption, FheString, Padded, Pattern},
-    scan::scan,
-};
+use crate::ciphertext::{FheBool, FheOption, FheString, Padded, Pattern};
+use crate::scan::scan;
 
 use super::ServerKey;
 
@@ -31,15 +29,33 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let foobar = client_key.encrypt_str("foo:bar").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&foobar, "foo:")), Some("bar".to_string()));
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_prefix(&foobar, "foo:")),
+    ///     Some("bar".to_string())
+    /// );
     /// let foo = client_key.encrypt_str("foo").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&foobar, &foo)), Some(":bar".to_string()));
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&foobar, "bar")), None);
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_prefix(&foobar, &foo)),
+    ///     Some(":bar".to_string())
+    /// );
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_prefix(&foobar, "bar")),
+    ///     None
+    /// );
     /// let bar = client_key.encrypt_str("bar").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&foobar, &bar)), None);
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_prefix(&foobar, &bar)),
+    ///     None
+    /// );
     /// let foofoo = client_key.encrypt_str("foofoo").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&foofoo, "foo")), Some("foo".to_string()));
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_prefix(&foofoo, &foo)), Some("foo".to_string()));
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_prefix(&foofoo, "foo")),
+    ///     Some("foo".to_string())
+    /// );
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_prefix(&foofoo, &foo)),
+    ///     Some("foo".to_string())
+    /// );
     /// ```
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
@@ -151,7 +167,8 @@ impl ServerKey {
     }
 
     /// Returns an encrypted option (a tuple: a flag, i.e. encrypted `1`, and `FheString`)
-    /// that contains a new encrypted string with the suffix removed once (i.e. the string before the suffix).
+    /// that contains a new encrypted string with the suffix removed once (i.e. the string before
+    /// the suffix).
     ///
     /// Returns an encrypted `false` (`0` in the first tuple component)
     /// if the string doesn't end with the pattern.
@@ -166,15 +183,33 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let barfoo = client_key.encrypt_str("bar:foo").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, ":foo")), Some("bar".to_string()));
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, ":foo")),
+    ///     Some("bar".to_string())
+    /// );
     /// let foo = client_key.encrypt_str("foo").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, &foo)), Some("bar:".to_string()));
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, "bar")), None);
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, &foo)),
+    ///     Some("bar:".to_string())
+    /// );
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, "bar")),
+    ///     None
+    /// );
     /// let bar = client_key.encrypt_str("bar").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, &bar)), None);
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_suffix(&barfoo, &bar)),
+    ///     None
+    /// );
     /// let foofoo = client_key.encrypt_str("foofoo").unwrap();
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&foofoo, "foo")), Some("foo".to_string()));
-    /// assert_eq!(client_key.decrypt_option_str(&server_key.strip_suffix(&foofoo, &foo)), Some("foo".to_string()));
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_suffix(&foofoo, "foo")),
+    ///     Some("foo".to_string())
+    /// );
+    /// assert_eq!(
+    ///     client_key.decrypt_option_str(&server_key.strip_suffix(&foofoo, &foo)),
+    ///     Some("foo".to_string())
+    /// );
     /// ```
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
@@ -294,7 +329,10 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let s = client_key.encrypt_str("\n Hello\tworld\t\n").unwrap();
-    /// assert_eq!("\n Hello\tworld", client_key.decrypt_str(&server_key.trim_end(&s)));
+    /// assert_eq!(
+    ///     "\n Hello\tworld",
+    ///     client_key.decrypt_str(&server_key.trim_end(&s))
+    /// );
     /// ```
     #[inline]
     #[must_use = "this returns the trimmed string as a new FheString, \
@@ -386,7 +424,10 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let s = client_key.encrypt_str("\n Hello\tworld\t\n").unwrap();
-    /// assert_eq!("Hello\tworld\t\n", client_key.decrypt_str(&server_key.trim_start(&s)));
+    /// assert_eq!(
+    ///     "Hello\tworld\t\n",
+    ///     client_key.decrypt_str(&server_key.trim_start(&s))
+    /// );
     /// ```
     #[inline]
     #[must_use = "this returns the trimmed string as a new FheString, \
@@ -482,7 +523,8 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::{integer::gen_keys, shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS};
+    use tfhe::integer::gen_keys;
+    use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
 

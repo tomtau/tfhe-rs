@@ -1,10 +1,8 @@
 use rayon::prelude::*;
 use tfhe::integer::RadixCiphertext;
 
-use crate::{
-    ciphertext::{FheAsciiChar, FheString, Number, Padded, Pattern},
-    scan::scan,
-};
+use crate::ciphertext::{FheAsciiChar, FheString, Number, Padded, Pattern};
+use crate::scan::scan;
 
 use super::ServerKey;
 
@@ -282,7 +280,11 @@ impl ServerKey {
                 if i < to_pat_enc.len() {
                     result[i] = self
                         .0
-                        .if_then_else_parallelized(&str_ref_empty, &to_pat_enc[i], result[i].as_ref())
+                        .if_then_else_parallelized(
+                            &str_ref_empty,
+                            &to_pat_enc[i],
+                            result[i].as_ref(),
+                        )
                         .into();
                 } else {
                     result[i] = self
@@ -500,14 +502,26 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let s = client_key.encrypt_str("this is old").unwrap();
-    /// assert_eq!("this is new", client_key.decrypt_str(&server_key.replace(&s, "old", "new")));
-    /// assert_eq!("than an old", client_key.decrypt_str(&server_key.replace(&s, "is", "an")));
+    /// assert_eq!(
+    ///     "this is new",
+    ///     client_key.decrypt_str(&server_key.replace(&s, "old", "new"))
+    /// );
+    /// assert_eq!(
+    ///     "than an old",
+    ///     client_key.decrypt_str(&server_key.replace(&s, "is", "an"))
+    /// );
     /// let old = client_key.encrypt_str("old").unwrap();
     /// let new = client_key.encrypt_str("new").unwrap();
     /// let is = client_key.encrypt_str("is").unwrap();
     /// let an = client_key.encrypt_str("an").unwrap();
-    /// assert_eq!("this is new", client_key.decrypt_str(&server_key.replace(&s, &old, &new)));
-    /// assert_eq!("than an old", client_key.decrypt_str(&server_key.replace(&s, &is, &an)));
+    /// assert_eq!(
+    ///     "this is new",
+    ///     client_key.decrypt_str(&server_key.replace(&s, &old, &new))
+    /// );
+    /// assert_eq!(
+    ///     "than an old",
+    ///     client_key.decrypt_str(&server_key.replace(&s, &is, &an))
+    /// );
     /// ```
     ///
     /// When the pattern doesn't match, it returns `encrypted_str` as [`FheString`]:
@@ -518,10 +532,16 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let s = client_key.encrypt_str("this is old").unwrap();
-    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replace(&s, "X", "Y")));
+    /// assert_eq!(
+    ///     "this is old",
+    ///     client_key.decrypt_str(&server_key.replace(&s, "X", "Y"))
+    /// );
     /// let x = client_key.encrypt_str("X").unwrap();
     /// let y = client_key.encrypt_str("Y").unwrap();
-    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replace(&s, &x, &y)));
+    /// assert_eq!(
+    ///     "this is old",
+    ///     client_key.decrypt_str(&server_key.replace(&s, &x, &y))
+    /// );
     /// ```
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
@@ -585,32 +605,31 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let s = client_key.encrypt_str("foo foo 123 foo").unwrap();
-    /// assert_eq!("new new 123 foo", client_key.decrypt_str(&server_key.replacen(&s, "foo", "new", 2)));
-    /// let foo = client_key.encrypt_str("foo").unwrap();
+    /// assert_eq!("new new 123 foo", client_key.decrypt_str(&server_key.replacen(&s, "foo", "new",
+    /// 2))); let foo = client_key.encrypt_str("foo").unwrap();
     /// let new = client_key.encrypt_str("new").unwrap();
     /// let count2 = client_key.encrypt_usize(2);
-    /// assert_eq!("new new 123 foo", client_key.decrypt_str(&server_key.replacen(&s, foo, new, count2)));
-    /// assert_eq!("faa fao 123 foo", client_key.decrypt_str(&server_key.replacen(&s, "o", "a", 3)));
-    /// let o = client_key.encrypt_str("o").unwrap();
+    /// assert_eq!("new new 123 foo", client_key.decrypt_str(&server_key.replacen(&s, foo, new,
+    /// count2))); assert_eq!("faa fao 123 foo", client_key.decrypt_str(&server_key.replacen(&s,
+    /// "o", "a", 3))); let o = client_key.encrypt_str("o").unwrap();
     /// let a = client_key.encrypt_str("a").unwrap();
     /// let count3 = client_key.encrypt_usize(3);
-    /// assert_eq!("faa fao 123 foo", client_key.decrypt_str(&server_key.replacen(&s, "o", "a", count3)));
-    /// ```
+    /// assert_eq!("faa fao 123 foo", client_key.decrypt_str(&server_key.replacen(&s, "o", "a",
+    /// count3))); ```
     ///
     /// When the pattern doesn't match, it returns this string slice as [`String`]:
-    ///
     /// ```
     /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
     /// let client_key = client_key::ClientKey::from(ck);
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let s = client_key.encrypt_str("this is old").unwrap();
-    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replacen(&s, "cookie monster", "little lamb", 10)));
-    /// let cm = client_key.encrypt_str("cookie monster").unwrap();
+    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replacen(&s, "cookie monster",
+    /// "little lamb", 10))); let cm = client_key.encrypt_str("cookie monster").unwrap();
     /// let ll = client_key.encrypt_str("little lamb").unwrap();
     /// let count10 = client_key.encrypt_usize(10);
-    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replacen(&s, &cm, &ll, count10)));
-    /// ```
+    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replacen(&s, &cm, &ll,
+    /// count10))); ```
     #[must_use = "this returns the replaced `FheString` as a new allocation, \
                       without modifying the original"]
     pub fn replacen<'a, P: Into<Pattern<'a, Padded>>, N: Into<Number>>(
@@ -628,7 +647,8 @@ impl ServerKey {
                 encrypted_str.clone()
             }
             (_, _, Number::Clear(0)) => encrypted_str.clone(),
-            // TODO: CLear/Clear/Encrypted works via replace_diff_len_pat_clear, but may can be made more efficient?
+            // TODO: CLear/Clear/Encrypted works via replace_diff_len_pat_clear, but may can be made
+            // more efficient?
             (Pattern::Clear(from_pat), Pattern::Clear(to_pat), Number::Clear(count))
                 if from_pat.is_empty() =>
             {
@@ -660,7 +680,8 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::{integer::gen_keys, shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS};
+    use tfhe::integer::gen_keys;
+    use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
 

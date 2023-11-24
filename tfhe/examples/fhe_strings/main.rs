@@ -3,10 +3,8 @@ mod client_key;
 mod scan;
 mod server_key;
 
-use std::{
-    io::{self, Error},
-    time::Instant,
-};
+use std::io::{self, Error};
+use std::time::Instant;
 
 use clap::{Arg, ArgAction, Command};
 use env_logger::Env;

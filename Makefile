@@ -688,6 +688,29 @@ write_params_to_file: install_rs_check_toolchain
 # Real use case examples
 #
 
+.PHONY: fhe_strings # Run fhe_strings example
+fhe_strings: install_rs_check_toolchain
+	RUSTFLAGS="$(RUSTFLAGS)" cargo $(CARGO_RS_CHECK_TOOLCHAIN) run --profile $(CARGO_PROFILE) \
+	--example fhe_strings \
+	--features=$(TARGET_ARCH_FEATURE),integer \
+	-- -i $(INPUT_STRING) -p $(INPUT_PATTERN)
+
+# (NOTE: this may exhaust CPU time budget on a laptop OS scheduler, use `fhe_strings_test_per_mod` instead)
+PHONY: fhe_strings_test # Run fhe_strings tests
+fhe_strings_test: install_rs_check_toolchain
+	RUSTFLAGS="$(RUSTFLAGS)" cargo $(CARGO_RS_CHECK_TOOLCHAIN) test --profile $(CARGO_PROFILE) \
+	--example fhe_strings \
+	--features=$(TARGET_ARCH_FEATURE),integer
+
+PHONY: fhe_strings_test_per_mod # Run fhe_strings tests in several runs, filtering out by module
+fhe_strings_test_per_mod: install_rs_check_toolchain
+	for module in "comparison" "conversion" "search" "split" "trim" "concat" "is_empty" "len" "repeat" "replace"; do \
+		RUSTFLAGS="$(RUSTFLAGS)" cargo $(CARGO_RS_CHECK_TOOLCHAIN) test --profile $(CARGO_PROFILE) \
+		--example fhe_strings \
+		--features=$(TARGET_ARCH_FEATURE),integer \
+		-- $$module ; \
+	done
+
 .PHONY: regex_engine # Run regex_engine example
 regex_engine: install_rs_check_toolchain
 	RUSTFLAGS="$(RUSTFLAGS)" cargo $(CARGO_RS_CHECK_TOOLCHAIN) run --profile $(CARGO_PROFILE) \

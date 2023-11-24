@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::{integer::gen_keys, shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS};
+    use tfhe::integer::gen_keys;
+    use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
 

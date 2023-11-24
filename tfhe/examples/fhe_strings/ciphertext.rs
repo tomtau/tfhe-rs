@@ -1,4 +1,5 @@
-use std::{marker::PhantomData, num::NonZeroUsize};
+use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 
 use tfhe::integer::RadixCiphertext;
 

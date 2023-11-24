@@ -1,15 +1,11 @@
 use std::num::NonZeroUsize;
 
 use serde::{Deserialize, Serialize};
-use tfhe::{
-    integer::{gen_keys, ClientKey as IntegerClientKey},
-    shortint::ShortintParameterSet,
-};
+use tfhe::integer::{gen_keys, ClientKey as IntegerClientKey};
+use tfhe::shortint::ShortintParameterSet;
 
-use crate::{
-    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Padded},
-    server_key::{FhePatternLen, FheSplitResult},
-};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Padded};
+use crate::server_key::{FhePatternLen, FheSplitResult};
 
 pub(crate) const PRECISION_BITS: usize = 8;
 
@@ -102,7 +98,8 @@ impl ClientKey {
                 current.push(char as u8 as char);
             }
         }
-        if (((last_found && any_non_zero) || result.is_empty()) && matches!(include_empty, Some(l) if l > 0))
+        if (((last_found && any_non_zero) || result.is_empty())
+            && matches!(include_empty, Some(l) if l > 0))
             || !current.is_empty()
         {
             result.push(current);

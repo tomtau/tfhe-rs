@@ -13,10 +13,8 @@ use std::collections::VecDeque;
 use rayon::prelude::*;
 use tfhe::integer::RadixCiphertext;
 
-use crate::{
-    ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number, Padded, Pattern},
-    scan::scan,
-};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number, Padded, Pattern};
+use crate::scan::scan;
 
 use super::ServerKey;
 
@@ -32,7 +30,8 @@ type SplitFoundPattern = VecDeque<(FheBool, FheAsciiChar)>;
 /// Unlike the Rust standard library's `Split` iterator, it is not lazy over string subslices, i.e.
 /// it computes eagerly and returns all collected splits.
 /// The way to process it is using [`ClientKey`]'s `decrypt_split` method
-/// (which produces an equivalent result to calling the Rust standard library's split and collect methods).
+/// (which produces an equivalent result to calling the Rust standard library's split and collect
+/// methods).
 pub enum FheSplitResult {
     RSplit(FhePatternLen, SplitFoundPattern),
     RSplitN(Option<FheBool>, FhePatternLen, SplitFoundPattern),
@@ -120,7 +119,10 @@ impl ServerKey {
         match max_count {
             Some(0) => return split_sequence,
             Some(1) => {
-                split_sequence.push_back((self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64), zero.clone().into()));
+                split_sequence.push_back((
+                    self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64),
+                    zero.clone().into(),
+                ));
 
                 split_sequence.par_extend(str_ref.par_iter().map(|x| (zero.clone(), x.clone())));
                 return split_sequence;
@@ -128,7 +130,10 @@ impl ServerKey {
             Some(c) => {
                 let len = std::cmp::min(str_ref.len(), c - 2);
                 split_sequence.push_back((one.clone(), zero.clone().into()));
-                split_sequence.push_back((self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64), zero.clone().into()));
+                split_sequence.push_back((
+                    self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64),
+                    zero.clone().into(),
+                ));
 
                 split_sequence.par_extend(
                     str_ref[..len]
@@ -174,7 +179,7 @@ impl ServerKey {
         str_ref: &[FheAsciiChar],
         pat: &str,
         max_count: Option<&Number>,
-    ) -> impl ParallelIterator<Item=Option<(Option<FheUsize>, FheUsize)>> + 'a {
+    ) -> impl ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>> + 'a {
         let pattern_starts = (0..str_len).into_par_iter().map(|i| {
             let starts = self.starts_with_clear_par(&str_ref[i..], pat);
             let starts_len = self.0.scalar_mul_parallelized(&starts, pat.len() as u64);
@@ -255,11 +260,17 @@ impl ServerKey {
                 let normal_count = self.0.create_trivial_radix(*mc as u64, self.1);
                 let final_count = self.0.sub_parallelized(&normal_count, &is_empty_pat);
 
-                Some(self.0.if_then_else_parallelized(&empty_str_ref, &zero, &final_count))
+                Some(
+                    self.0
+                        .if_then_else_parallelized(&empty_str_ref, &zero, &final_count),
+                )
             }
             Some(Number::Encrypted(mc)) => {
                 let final_count = self.0.sub_parallelized(mc, &is_empty_pat);
-                Some(self.0.if_then_else_parallelized(&empty_str_ref, &zero, &final_count))
+                Some(
+                    self.0
+                        .if_then_else_parallelized(&empty_str_ref, &zero, &final_count),
+                )
             }
             _ => None,
         };
@@ -289,42 +300,42 @@ impl ServerKey {
             },
             None,
         )
-            .filter_map(|x| {
-                x.map(|(count, starts, ended)| {
-                    let count_not_reached = match (&adjust_max_count, count.as_ref()) {
-                        (Some(mc), Some(c)) => Some(self.0.lt_parallelized(c, mc)),
-                        _ => None,
-                    };
-                    let ((pattern_starts, not_ended), in_pattern) = rayon::join(
-                        || {
-                            rayon::join(
-                                || {
-                                    let pattern_starts = self.0.eq_parallelized(&starts, &pat_len);
-                                    if let Some(ref cnr) = count_not_reached {
-                                        self.0.bitand_parallelized(cnr, &pattern_starts)
-                                    } else {
-                                        pattern_starts
-                                    }
-                                },
-                                || self.0.scalar_le_parallelized(&ended, 1),
-                            )
-                        },
-                        || {
-                            let in_pattern = self.0.scalar_gt_parallelized(&starts, 0u64);
-                            if let Some(ref cnr) = count_not_reached {
-                                self.0.bitand_parallelized(cnr, &in_pattern)
-                            } else {
-                                in_pattern
-                            }
-                        },
-                    );
-                    (
-                        self.0.bitand_parallelized(&pattern_starts, &not_ended),
-                        self.0.bitand_parallelized(&in_pattern, &is_not_empty_pat),
-                    )
-                })
+        .filter_map(|x| {
+            x.map(|(count, starts, ended)| {
+                let count_not_reached = match (&adjust_max_count, count.as_ref()) {
+                    (Some(mc), Some(c)) => Some(self.0.lt_parallelized(c, mc)),
+                    _ => None,
+                };
+                let ((pattern_starts, not_ended), in_pattern) = rayon::join(
+                    || {
+                        rayon::join(
+                            || {
+                                let pattern_starts = self.0.eq_parallelized(&starts, &pat_len);
+                                if let Some(ref cnr) = count_not_reached {
+                                    self.0.bitand_parallelized(cnr, &pattern_starts)
+                                } else {
+                                    pattern_starts
+                                }
+                            },
+                            || self.0.scalar_le_parallelized(&ended, 1),
+                        )
+                    },
+                    || {
+                        let in_pattern = self.0.scalar_gt_parallelized(&starts, 0u64);
+                        if let Some(ref cnr) = count_not_reached {
+                            self.0.bitand_parallelized(cnr, &in_pattern)
+                        } else {
+                            in_pattern
+                        }
+                    },
+                );
+                (
+                    self.0.bitand_parallelized(&pattern_starts, &not_ended),
+                    self.0.bitand_parallelized(&in_pattern, &is_not_empty_pat),
+                )
             })
-            .collect();
+        })
+        .collect();
         split_sequence.par_extend(self.split_compute(accumulated_starts, str_ref, &zero));
         (orig_len, split_sequence)
     }
@@ -335,7 +346,7 @@ impl ServerKey {
         accumulated_starts: Vec<(FheBool, FheBool)>,
         str_ref: &'a [FheAsciiChar],
         zero: &'a RadixCiphertext,
-    ) -> impl ParallelIterator<Item=(FheBool, FheAsciiChar)> + 'a {
+    ) -> impl ParallelIterator<Item = (FheBool, FheAsciiChar)> + 'a {
         accumulated_starts
             .into_par_iter()
             .zip(str_ref.into_par_iter())
@@ -447,11 +458,15 @@ impl ServerKey {
         );
         let mut split_sequence = SplitFoundPattern::new();
 
-        let (empty_str_ref, empty_skip_len) = rayon::join(|| self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64),
-                                                          || {
-                                                              let zero_count = str_ref.par_iter().map(|x| self.0.scalar_eq_parallelized(x.as_ref(), 0u64)).reduce(|| self.false_ct(), |x, y| self.0.add_parallelized(&x, &y));
-                                                              self.0.mul_parallelized(&zero_count, &is_empty_pat)
-                                                          },
+        let (empty_str_ref, empty_skip_len) = rayon::join(
+            || self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64),
+            || {
+                let zero_count = str_ref
+                    .par_iter()
+                    .map(|x| self.0.scalar_eq_parallelized(x.as_ref(), 0u64))
+                    .reduce(|| self.false_ct(), |x, y| self.0.add_parallelized(&x, &y));
+                self.0.mul_parallelized(&zero_count, &is_empty_pat)
+            },
         );
 
         match &max_count {
@@ -483,11 +498,17 @@ impl ServerKey {
                 let normal_count = self.0.create_trivial_radix(*mc as u64, self.1);
                 let final_count = self.0.add_parallelized(&normal_count, &empty_skip_len);
 
-                Some(self.0.if_then_else_parallelized(&empty_str_ref, &zero, &final_count))
+                Some(
+                    self.0
+                        .if_then_else_parallelized(&empty_str_ref, &zero, &final_count),
+                )
             }
             Some(Number::Encrypted(mc)) => {
                 let final_count = self.0.add_parallelized(mc, &empty_skip_len);
-                Some(self.0.if_then_else_parallelized(&empty_str_ref, &zero, &final_count))
+                Some(
+                    self.0
+                        .if_then_else_parallelized(&empty_str_ref, &zero, &final_count),
+                )
             }
             _ => None,
         };
@@ -535,33 +556,31 @@ impl ServerKey {
                     },
                     None,
                 )
-                    .filter_map(|x| {
-                        x.map(|(count, starts)| {
-                            let count_not_reached = match (&adjust_max_count, count.as_ref()) {
-                                (Some(mc), Some(c)) => {
-                                    Some(self.0.lt_parallelized(c, mc))
-                                }
-                                _ => None,
-                            };
-                            let (pattern_starts, in_pattern) = rayon::join(
-                                || self.0.scalar_eq_parallelized(&starts, 1u64),
-                                || self.0.scalar_gt_parallelized(&starts, 0u64),
+                .filter_map(|x| {
+                    x.map(|(count, starts)| {
+                        let count_not_reached = match (&adjust_max_count, count.as_ref()) {
+                            (Some(mc), Some(c)) => Some(self.0.lt_parallelized(c, mc)),
+                            _ => None,
+                        };
+                        let (pattern_starts, in_pattern) = rayon::join(
+                            || self.0.scalar_eq_parallelized(&starts, 1u64),
+                            || self.0.scalar_gt_parallelized(&starts, 0u64),
+                        );
+                        if let Some(cnr) = count_not_reached {
+                            let (ps, inp) = rayon::join(
+                                || self.0.bitand_parallelized(&pattern_starts, &cnr),
+                                || self.0.bitand_parallelized(&in_pattern, &is_not_empty),
                             );
-                            if let Some(cnr) = count_not_reached {
-                                let (ps, inp) = rayon::join(
-                                    || self.0.bitand_parallelized(&pattern_starts, &cnr),
-                                    || self.0.bitand_parallelized(&in_pattern, &is_not_empty),
-                                );
-                                (ps, self.0.bitand_parallelized(&inp, &cnr))
-                            } else {
-                                (
-                                    pattern_starts,
-                                    self.0.bitand_parallelized(&in_pattern, &is_not_empty),
-                                )
-                            }
-                        })
+                            (ps, self.0.bitand_parallelized(&inp, &cnr))
+                        } else {
+                            (
+                                pattern_starts,
+                                self.0.bitand_parallelized(&in_pattern, &is_not_empty),
+                            )
+                        }
                     })
-                    .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
             },
             || {
                 scan(zeroes, |x, y| self.add(x.as_ref(), y.as_ref()), None)
@@ -744,31 +763,28 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("Mary had a little lamb").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit(s, " ")),
-    ///   vec!["lamb", "little", "a", "had", "Mary"]
+    ///     client_key.decrypt_split(server_key.rsplit(s, " ")),
+    ///     vec!["lamb", "little", "a", "had", "Mary"]
     /// );
     ///
     /// let s = client_key.encrypt_str("").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit(s, "X")),
-    ///   vec![""]
+    ///     client_key.decrypt_split(server_key.rsplit(s, "X")),
+    ///     vec![""]
     /// );
     /// let x = client_key.encrypt_str("X").unwrap();
-    /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit(s, &x)),
-    ///   vec![""]
-    /// );
+    /// assert_eq!(client_key.decrypt_split(server_key.rsplit(s, &x)), vec![""]);
     ///
     /// let s = client_key.encrypt_str("lionXXtigerXleopard").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit(s, "X")),
-    ///   vec!["leopard", "tiger", "", "lion"]
+    ///     client_key.decrypt_split(server_key.rsplit(s, "X")),
+    ///     vec!["leopard", "tiger", "", "lion"]
     /// );
     ///
     /// let s = client_key.encrypt_str("lion::tiger::leopard").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit(s, "::")),
-    ///   vec!["leopard", "tiger", "lion"]
+    ///     client_key.decrypt_split(server_key.rsplit(s, "::")),
+    ///     vec!["leopard", "tiger", "lion"]
     /// );
     /// ```
     #[inline]
@@ -800,18 +816,18 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("cfg").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit_once(s, "=")),
-    ///   vec!["cfg"]
+    ///     client_key.decrypt_split(server_key.rsplit_once(s, "=")),
+    ///     vec!["cfg"]
     /// );
     /// let s = client_key.encrypt_str("cfg=foo").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit_once(s, "=")),
-    ///   vec!["cfg", "foo"]
+    ///     client_key.decrypt_split(server_key.rsplit_once(s, "=")),
+    ///     vec!["cfg", "foo"]
     /// );
     /// let s = client_key.encrypt_str("cfg=foo=bar").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit_once(s, "=")),
-    ///   vec!["cfg=foo", "bar"]
+    ///     client_key.decrypt_split(server_key.rsplit_once(s, "=")),
+    ///     vec!["cfg=foo", "bar"]
     /// );
     /// ```
     #[inline]
@@ -855,20 +871,20 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("Mary had a little lambda").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplitn(s, 3, " ")),
-    ///   vec!["lamb", "little", "Mary had a"]
+    ///     client_key.decrypt_split(server_key.rsplitn(s, 3, " ")),
+    ///     vec!["lamb", "little", "Mary had a"]
     /// );
     ///
     /// let s = client_key.encrypt_str("lionXXtigerXleopard").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplitn(s, 3, "X")),
-    ///   vec!["leopard", "tiger", "lionX"]
+    ///     client_key.decrypt_split(server_key.rsplitn(s, 3, "X")),
+    ///     vec!["leopard", "tiger", "lionX"]
     /// );
     ///
     /// let s = client_key.encrypt_str("lion::tiger::leopard").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplitn(s, 2, "::")),
-    ///   vec!["leopard", "lion::tiger"]
+    ///     client_key.decrypt_split(server_key.rsplitn(s, 2, "::")),
+    ///     vec!["leopard", "lion::tiger"]
     /// );
     /// ```
     #[inline]
@@ -911,14 +927,14 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("A.B.").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit_terminator(s, ".")),
-    ///   vec!["B", "A"]
+    ///     client_key.decrypt_split(server_key.rsplit_terminator(s, ".")),
+    ///     vec!["B", "A"]
     /// );
     ///
     /// let s = client_key.encrypt_str("A..B..").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.rsplit_terminator(s, ".")),
-    ///   vec!["", "B", "", "A"]
+    ///     client_key.decrypt_split(server_key.rsplit_terminator(s, ".")),
+    ///     vec!["", "B", "", "A"]
     /// );
     /// ```
     #[inline]
@@ -952,31 +968,25 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("Mary had a lamb").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, " ")),
-    ///   vec!["Mary", "had", "a", "lamb"]
+    ///     client_key.decrypt_split(server_key.split(s, " ")),
+    ///     vec!["Mary", "had", "a", "lamb"]
     /// );
     ///
     /// let s = client_key.encrypt_str("").unwrap();
-    /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, "X")),
-    ///   vec![""]
-    /// );
+    /// assert_eq!(client_key.decrypt_split(server_key.split(s, "X")), vec![""]);
     /// let x = client_key.encrypt_str("X").unwrap();
-    /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, &x)),
-    ///   vec![""]
-    /// );
+    /// assert_eq!(client_key.decrypt_split(server_key.split(s, &x)), vec![""]);
     ///
     /// let s = client_key.encrypt_str("lionXXtigerXleo").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, "X")),
-    ///   vec!["lion", "", "tiger", "leo"]
+    ///     client_key.decrypt_split(server_key.split(s, "X")),
+    ///     vec!["lion", "", "tiger", "leo"]
     /// );
     ///
     /// let s = client_key.encrypt_str("lion::tiger::leo").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, "::")),
-    ///   vec!["lion", "tiger", "leo"]
+    ///     client_key.decrypt_split(server_key.split(s, "::")),
+    ///     vec!["lion", "tiger", "leo"]
     /// );
     /// ```
     ///
@@ -990,8 +1000,8 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("||||a||b|c").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, "|")),
-    ///   vec!["", "", "", "", "a", "", "b", "c"]
+    ///     client_key.decrypt_split(server_key.split(s, "|")),
+    ///     vec!["", "", "", "", "a", "", "b", "c"]
     /// );
     /// ```
     ///
@@ -1004,8 +1014,8 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("(///)").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, "/")),
-    ///   vec!["(", "", "", ")"]
+    ///     client_key.decrypt_split(server_key.split(s, "/")),
+    ///     vec!["(", "", "", ")"]
     /// );
     /// ```
     ///
@@ -1019,8 +1029,8 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("010").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, "0")),
-    ///   vec!["", "1", ""]
+    ///     client_key.decrypt_split(server_key.split(s, "0")),
+    ///     vec!["", "1", ""]
     /// );
     /// ```
     ///
@@ -1035,8 +1045,8 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("rust").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, "")),
-    ///   vec!["", "r", "u", "s", "t", ""]
+    ///     client_key.decrypt_split(server_key.split(s, "")),
+    ///     vec!["", "r", "u", "s", "t", ""]
     /// );
     /// ```
     ///
@@ -1050,8 +1060,8 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("    a  b c").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split(s, " ")),
-    ///   vec!["", "", "", "", "a", "", "b", "c"]
+    ///     client_key.decrypt_split(server_key.split(s, " ")),
+    ///     vec!["", "", "", "", "a", "", "b", "c"]
     /// );
     /// ```
     ///
@@ -1093,8 +1103,8 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("A few words").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
-    ///   vec!["A", "few", "words"]
+    ///     client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
+    ///     vec!["A", "few", "words"]
     /// );
     /// ```
     ///
@@ -1105,10 +1115,12 @@ impl ServerKey {
     /// let client_key = client_key::ClientKey::from(ck);
     /// let server_key = server_key::ServerKey::from(sk);
     ///
-    /// let s = client_key.encrypt_str(" Mary   had\ta little  \n\t lamb").unwrap();
+    /// let s = client_key
+    ///     .encrypt_str(" Mary   had\ta little  \n\t lamb")
+    ///     .unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
-    ///   vec!["Mary", "had", "a", "little", "lamb"]
+    ///     client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
+    ///     vec!["Mary", "had", "a", "little", "lamb"]
     /// );
     /// ```
     ///
@@ -1120,13 +1132,13 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
-    ///   vec![]
+    ///     client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
+    ///     vec![]
     /// );
     /// let s = client_key.encrypt_str("   ").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
-    ///   vec![]
+    ///     client_key.decrypt_split(server_key.split_ascii_whitespace(s)),
+    ///     vec![]
     /// );
     /// ```
     #[must_use = "this returns the split FheString as an iterator, \
@@ -1177,10 +1189,16 @@ impl ServerKey {
     /// let client_key = client_key::ClientKey::from(ck);
     /// let server_key = server_key::ServerKey::from(sk);
     ///
-    /// let s = client_key.encrypt_str("Mary had a little lamb\nlittle lamb\nlittle lamb.\n").unwrap();
+    /// let s = client_key
+    ///     .encrypt_str("Mary had a little lamb\nlittle lamb\nlittle lamb.\n")
+    ///     .unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split_inclusive(s, "\n")),
-    ///   vec!["Mary had a little lamb\n", "little lamb\n", "little lamb.\n"]
+    ///     client_key.decrypt_split(server_key.split_inclusive(s, "\n")),
+    ///     vec![
+    ///         "Mary had a little lamb\n",
+    ///         "little lamb\n",
+    ///         "little lamb.\n"
+    ///     ]
     /// );
     /// ```
     #[inline]
@@ -1239,8 +1257,8 @@ impl ServerKey {
                     },
                     None,
                 )
-                    .filter_map(|x| x.map(|y| self.0.scalar_eq_parallelized(&y, 1)))
-                    .collect();
+                .filter_map(|x| x.map(|y| self.0.scalar_eq_parallelized(&y, 1)))
+                .collect();
                 split_sequence.par_extend(
                     accumulated_starts
                         .into_par_iter()
@@ -1280,14 +1298,14 @@ impl ServerKey {
     ///
     /// let s = client_key.encrypt_str("A.B.").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split_terminator(s, ".")),
-    ///   vec!["A", "B"]
+    ///     client_key.decrypt_split(server_key.split_terminator(s, ".")),
+    ///     vec!["A", "B"]
     /// );
     ///
     /// let s = client_key.encrypt_str("A..B..").unwrap();
     /// assert_eq!(
-    ///   client_key.decrypt_split(server_key.split_terminator(s, ".")),
-    ///   vec!["A", "", "B", ""]
+    ///     client_key.decrypt_split(server_key.split_terminator(s, ".")),
+    ///     vec!["A", "", "B", ""]
     /// );
     /// ```
     #[inline]
@@ -1393,10 +1411,16 @@ impl ServerKey {
                         Number::Encrypted(mc) => {
                             let not_single_match = self.0.scalar_ne_parallelized(mc, 1u64);
 
-                            split_sequence.push_back((self.0.bitor_parallelized(&not_single_match, &empty_input), zero.clone().into()));
-                            split_sequence.push_back((self.0.bitand_parallelized(&not_single_match, &empty_input), zero.clone().into()));
+                            split_sequence.push_back((
+                                self.0.bitor_parallelized(&not_single_match, &empty_input),
+                                zero.clone().into(),
+                            ));
+                            split_sequence.push_back((
+                                self.0.bitand_parallelized(&not_single_match, &empty_input),
+                                zero.clone().into(),
+                            ));
                         }
-                        _ => split_sequence.push_back((self.true_ct(), zero.clone().into()))
+                        _ => split_sequence.push_back((self.true_ct(), zero.clone().into())),
                     };
                 }
                 let adjust_max_count = if pat.is_empty() {
@@ -1404,9 +1428,11 @@ impl ServerKey {
                         Number::Clear(mc) => Number::Clear(mc.saturating_sub(1)),
                         Number::Encrypted(mc) => {
                             let reduced_match = self.0.scalar_sub_parallelized(&mc, 1u64);
-                            Number::Encrypted(
-                                self.0.if_then_else_parallelized(&empty_input, &self.false_ct(), &reduced_match)
-                            )
+                            Number::Encrypted(self.0.if_then_else_parallelized(
+                                &empty_input,
+                                &self.false_ct(),
+                                &reduced_match,
+                            ))
                         }
                     }
                 } else {

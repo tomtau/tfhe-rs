@@ -18,10 +18,10 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tfhe::integer::ServerKey as IntegerServerKey;
 
-use crate::{
-    ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Number, Padded, Pattern},
-    client_key::{ClientKey, PRECISION_BITS},
+use crate::ciphertext::{
+    FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Number, Padded, Pattern,
 };
+use crate::client_key::{ClientKey, PRECISION_BITS};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ServerKey(IntegerServerKey, usize);
@@ -287,7 +287,8 @@ impl ServerKey {
                 // || is_lower_x && !is_lower_y && converted_x == y
                 // || !is_lower_x && is_lower_y && x == converted_y
                 // simplifies to:
-                // x_eq_y || is_lower_x && !is_lower_y && converted_x == y || !is_lower_x && is_lower_y && x == converted_y
+                // x_eq_y || is_lower_x && !is_lower_y && converted_x == y || !is_lower_x &&
+                // is_lower_y && x == converted_y
                 let ((not_is_lower_y, not_is_lower_x), (converted_x_eq_y, x_eq_converted_y)) =
                     rayon::join(
                         || {
@@ -373,7 +374,8 @@ impl ServerKey {
     /// that contains the byte index for the first character of the first match of the pattern in
     /// `encrypted_str`.
     ///
-    /// Returns an encrypted `false` (`0` in the first tuple component) if the pattern doesn't match.
+    /// Returns an encrypted `false` (`0` in the first tuple component) if the pattern doesn't
+    /// match.
     ///
     /// The pattern can be a clear `&str` or an encrypted &FheString.
     ///
@@ -385,12 +387,24 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let bananas = client_key.encrypt_str("bananas").unwrap();
-    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, "a")), Some(1));
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, "a")),
+    ///     Some(1)
+    /// );
     /// let a = client_key.encrypt_str("a").unwrap();
-    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, a)), Some(1));
-    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, "z")), None);
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, a)),
+    ///     Some(1)
+    /// );
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, "z")),
+    ///     None
+    /// );
     /// let z = client_key.encrypt_str("z").unwrap();
-    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, z)), None);
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, z)),
+    ///     None
+    /// );
     /// ```
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
@@ -555,9 +569,15 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let s = client_key.encrypt_str("abc").unwrap();
-    /// assert_eq!("abcabcabcabc", client_key.decrypt_str(&server_key.repeat(&s, 4)));
+    /// assert_eq!(
+    ///     "abcabcabcabc",
+    ///     client_key.decrypt_str(&server_key.repeat(&s, 4))
+    /// );
     /// let n = client_key.encrypt_usize(4);
-    /// assert_eq!("abcabcabcabc", client_key.decrypt_str(&server_key.repeat(&s, n)));
+    /// assert_eq!(
+    ///     "abcabcabcabc",
+    ///     client_key.decrypt_str(&server_key.repeat(&s, n))
+    /// );
     /// ```
     ///
     /// A panic upon overflow:
@@ -688,7 +708,8 @@ impl ServerKey {
     /// that contains the byte index for the first character of the last match of the pattern in
     /// `encrypted_str`.
     ///
-    /// Returns an encrypted `false` (`0` in the first tuple component) if the pattern doesn't match.
+    /// Returns an encrypted `false` (`0` in the first tuple component) if the pattern doesn't
+    /// match.
     ///
     /// The pattern can be a clear `&str` or an encrypted &FheString.
     ///
@@ -700,12 +721,24 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let bananas = client_key.encrypt_str("bananas").unwrap();
-    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, "a")), Some(5));
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, "a")),
+    ///     Some(5)
+    /// );
     /// let a = client_key.encrypt_str("a").unwrap();
-    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, a)), Some(5));
-    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, "z")), None);
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, a)),
+    ///     Some(5)
+    /// );
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, "z")),
+    ///     None
+    /// );
     /// let z = client_key.encrypt_str("z").unwrap();
-    /// assert_eq!(client_key.decrypt_option_usize(&server_key.find(&bananas, z)), None);
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, z)),
+    ///     None
+    /// );
     /// ```
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
@@ -857,7 +890,8 @@ impl ServerKey {
 
     /// Returns the lowercase equivalent of this encrypted string as a new [`FheString`].
     ///
-    /// 'Lowercase' is defined as adding 32 to the uppercase character, otherwise it remains the same.
+    /// 'Lowercase' is defined as adding 32 to the uppercase character, otherwise it remains the
+    /// same.
     ///
     /// # Examples
     ///
@@ -869,10 +903,16 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let s = client_key.encrypt_str("HELLO").unwrap();
-    /// assert_eq!("hello", client_key.decrypt_str(&server_key.to_lowercase(&s)));
+    /// assert_eq!(
+    ///     "hello",
+    ///     client_key.decrypt_str(&server_key.to_lowercase(&s))
+    /// );
     ///
     /// let s = client_key.encrypt_str("hello").unwrap();
-    /// assert_eq!("hello", client_key.decrypt_str(&server_key.to_lowercase(&s)));
+    /// assert_eq!(
+    ///     "hello",
+    ///     client_key.decrypt_str(&server_key.to_lowercase(&s))
+    /// );
     /// ```
     #[must_use = "this returns the lowercase string as a new FheString, \
                   without modifying the original"]
@@ -898,7 +938,8 @@ impl ServerKey {
 
     /// Returns the uppercase equivalent of this encrypted string as a new [`FheString`].
     ///
-    /// 'Uppercase' is defined as subtracting 32 from the lowercase character, otherwise it remains the same.
+    /// 'Uppercase' is defined as subtracting 32 from the lowercase character, otherwise it remains
+    /// the same.
     ///
     /// # Examples
     ///
@@ -910,10 +951,16 @@ impl ServerKey {
     /// let server_key = server_key::ServerKey::from(sk);
     ///
     /// let s = client_key.encrypt_str("hello").unwrap();
-    /// assert_eq!("HELLO", client_key.decrypt_str(&server_key.to_uppercase(&s)));
+    /// assert_eq!(
+    ///     "HELLO",
+    ///     client_key.decrypt_str(&server_key.to_uppercase(&s))
+    /// );
     ///
     /// let s = client_key.encrypt_str("HELLO").unwrap();
-    /// assert_eq!("HELLO", client_key.decrypt_str(&server_key.to_uppercase(&s)));
+    /// assert_eq!(
+    ///     "HELLO",
+    ///     client_key.decrypt_str(&server_key.to_uppercase(&s))
+    /// );
     /// ```
     #[must_use = "this returns the uppercase string as a new FheString, \
                   without modifying the original"]
@@ -951,7 +998,10 @@ impl ServerKey {
     ///
     /// let s1 = client_key.encrypt_str("hello").unwrap();
     /// let s2 = client_key.encrypt_str("world").unwrap();
-    /// assert_eq!("helloworld", client_key.decrypt_str(&server_key.concat(&s1, &s2)));
+    /// assert_eq!(
+    ///     "helloworld",
+    ///     client_key.decrypt_str(&server_key.concat(&s1, &s2))
+    /// );
     /// ```
     pub fn concat(
         &self,
@@ -1043,9 +1093,12 @@ impl ServerKey {
     /// Lexicographical comparison is an operation with the following properties:
     ///
     /// - Two sequences are compared element by element.
-    /// - The first mismatching element defines which sequence is lexicographically less or greater than the other.
-    /// - If one sequence is a prefix of another, the shorter sequence is lexicographically less than the other.
-    /// - If two sequence have equivalent elements and are of the same length, then the sequences are lexicographically equal.
+    /// - The first mismatching element defines which sequence is lexicographically less or greater
+    ///   than the other.
+    /// - If one sequence is a prefix of another, the shorter sequence is lexicographically less
+    ///   than the other.
+    /// - If two sequence have equivalent elements and are of the same length, then the sequences
+    ///   are lexicographically equal.
     /// - An empty sequence is lexicographically less than any non-empty sequence.
     /// - Two empty sequences are lexicographically equal.
     ///
@@ -1127,9 +1180,12 @@ impl ServerKey {
     /// Lexicographical comparison is an operation with the following properties:
     ///
     /// - Two sequences are compared element by element.
-    /// - The first mismatching element defines which sequence is lexicographically less or greater than the other.
-    /// - If one sequence is a prefix of another, the shorter sequence is lexicographically less than the other.
-    /// - If two sequence have equivalent elements and are of the same length, then the sequences are lexicographically equal.
+    /// - The first mismatching element defines which sequence is lexicographically less or greater
+    ///   than the other.
+    /// - If one sequence is a prefix of another, the shorter sequence is lexicographically less
+    ///   than the other.
+    /// - If two sequence have equivalent elements and are of the same length, then the sequences
+    ///   are lexicographically equal.
     /// - An empty sequence is lexicographically less than any non-empty sequence.
     /// - Two empty sequences are lexicographically equal.
     ///
