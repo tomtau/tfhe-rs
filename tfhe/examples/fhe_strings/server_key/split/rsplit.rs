@@ -5,22 +5,8 @@ mod test {
 
     use crate::{client_key, server_key};
 
-    #[test_matrix(
-        [("Mary had a little lamb", " "),
-        ("", "X"),
-        ("lionXXtigerXleo", "X"),
-        ("lion::tiger::leo", "::"),
-        ("9999a99b9c", "9"),
-        ("(///)", "/"),
-        ("010", "0"),
-        ("rust", ""),
-        ("    a  b c", " "),
-        ("banana", "ana"),
-        ("foo:bar", "foo:"),
-        ("foo:bar", "bar"),],
-        1..=3
-    )]
-    fn test_rsplit((input, split_pattern): (&str, &str), padding_len: usize) {
+    #[inline]
+    fn rsplit_test((input, split_pattern): (&str, &str), padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
@@ -42,5 +28,31 @@ mod test {
             input.rsplit(split_pattern).collect::<Vec<_>>(),
             client_key.decrypt_split(server_key.rsplit(&encrypted_str, &encrypted_split_pattern))
         );
+    }
+
+    #[test_matrix(
+        [("Mary had a little lamb", " "),
+        ("", "X"),
+        ("lionXXtigerXleo", "X"),
+        ("lion::tiger::leo", "::"),
+        ("9999a99b9c", "9"),
+        ("(///)", "/"),
+        ("010", "0"),
+        ("rust", ""),
+        ("    a  b c", " "),
+        ("banana", "ana"),
+        ("foo:bar", "foo:"),
+        ("foo:bar", "bar"),],
+        1..=3
+    )]
+    fn test_rsplit((input, split_pattern): (&str, &str), padding_len: usize) {
+        rsplit_test((input, split_pattern), padding_len);
+    }
+
+    #[test_matrix(
+        1..=3
+    )]
+    fn test_rsplit_empty(padding_len: usize) {
+        rsplit_test(("", ""), padding_len)
     }
 }

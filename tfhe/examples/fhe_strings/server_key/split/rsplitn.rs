@@ -5,14 +5,8 @@ mod test {
 
     use crate::{client_key, server_key};
 
-    #[test_matrix(
-        [("Mary had a little lamb", 3, " "),
-        ("", 3, "X"),
-        ("lionXXtigerXleopard", 3, "X"),
-        ("lion::tiger::leopard", 2, "::"),],
-        1..=3
-    )]
-    fn test_rsplitn((input, n, split_pattern): (&str, usize, &str), padding_len: usize) {
+    #[inline]
+    fn rsplitn_test((input, n, split_pattern): (&str, usize, &str), padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
@@ -35,7 +29,7 @@ mod test {
             client_key.decrypt_split(server_key.rsplitn(
                 &encrypted_str,
                 encrypted_n.clone(),
-                split_pattern
+                split_pattern,
             ))
         );
         println!("encrypted clear: {input} {split_pattern} {padding_len} {n}");
@@ -44,7 +38,7 @@ mod test {
             client_key.decrypt_split(server_key.rsplitn(
                 &encrypted_str,
                 n,
-                &encrypted_split_pattern
+                &encrypted_split_pattern,
             ))
         );
         println!("encrypted encrypted: {input} {split_pattern} {padding_len} {n}");
@@ -53,8 +47,28 @@ mod test {
             client_key.decrypt_split(server_key.rsplitn(
                 &encrypted_str,
                 encrypted_n,
-                &encrypted_split_pattern
+                &encrypted_split_pattern,
             ))
         );
+    }
+
+    #[test_matrix(
+        [("Mary had a little lamb", 3, " "),
+        ("", 3, "X"),
+        ("lionXXtigerXleopard", 3, "X"),
+        ("lion::tiger::leopard", 2, "::"),],
+        1..=3
+    )]
+    fn test_rsplitn((input, n, split_pattern): (&str, usize, &str), padding_len: usize) {
+        rsplitn_test((input, n, split_pattern), padding_len)
+    }
+
+    #[test_matrix(
+        ["rust", ""],
+        0..=3,
+        1..=3
+    )]
+    fn test_rsplitn_empty(input: &str, n: usize, padding_len: usize) {
+        rsplitn_test((input, n, ""), padding_len)
     }
 }
