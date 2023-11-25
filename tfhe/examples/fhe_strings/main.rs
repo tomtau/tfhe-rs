@@ -65,15 +65,12 @@ fn main() -> io::Result<()> {
         let input_string2 = matches
             .get_one::<String>("input_string2")
             .map(|s| s.to_owned())
-            .unwrap_or_else(|| "".to_string());
-        let n = matches
-            .get_one::<usize>("number")
-            .map(|n| *n)
-            .unwrap_or_else(|| 2);
+            .unwrap_or_default();
+        let n = matches.get_one::<usize>("number").copied().unwrap_or(2);
         let skip_n = matches
             .get_one::<bool>("skip_encrypted_number")
-            .map(|n| *n)
-            .unwrap_or_else(|| true);
+            .copied()
+            .unwrap_or(true);
         info!("input_string: {input_string}");
         info!("pattern  (or the second string for comparisons): {pattern}");
         info!("input_string2: {input_string2}");
@@ -84,11 +81,11 @@ fn main() -> io::Result<()> {
         let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let server_key = server_key::ServerKey::from(&client_key);
 
-        let encrypted_str = client_key.encrypt_str(&input_string).map_err(|e| {
+        let encrypted_str = client_key.encrypt_str(input_string).map_err(|e| {
             error!("Failed to encrypt input string: {e}");
             Error::new(io::ErrorKind::Other, e)
         })?;
-        let encrypted_pattern = client_key.encrypt_str(&pattern).map_err(|e| {
+        let encrypted_pattern = client_key.encrypt_str(pattern).map_err(|e| {
             error!("Failed to encrypt input pattern: {e}");
             Error::new(io::ErrorKind::Other, e)
         })?;

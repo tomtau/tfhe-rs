@@ -18,7 +18,7 @@ where
 
 // Compute the offset for each chunk by performing another sequential scan
 // on the last value of each chunk
-fn compute_offsets<'a, P, T>(data: &Vec<Vec<T>>, scan_op: &'a P, id: T) -> Vec<T>
+fn compute_offsets<P, T>(data: &Vec<Vec<T>>, scan_op: &P, id: T) -> Vec<T>
 where
     P: Fn(&T, &T) -> T,
 {
@@ -29,7 +29,7 @@ where
         // offsets is never empty because we already pushed id to it
         let last = offsets.last().unwrap();
         // `it` can never be empty due to implementation of ScanP1Folder
-        let next: T = (scan_op)(last, &it.last().unwrap());
+        let next: T = (scan_op)(last, it.last().unwrap());
         offsets.push(next);
     }
     offsets
@@ -39,7 +39,7 @@ where
 
 // Breaks the iterator into pieces and performs sequential scan on each
 // Returns intermediate data, a LinkedList of the result of each seq scan
-fn scan_p1<'a, PI, P, T>(pi: PI, scan_op: &'a P) -> LinkedList<Vec<T>>
+fn scan_p1<PI, P, T>(pi: PI, scan_op: &P) -> LinkedList<Vec<T>>
 where
     PI: ParallelIterator<Item = T>,
     P: Fn(&T, &T) -> T + Send + Sync,

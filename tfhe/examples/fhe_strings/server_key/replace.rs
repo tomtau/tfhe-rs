@@ -71,7 +71,7 @@ impl ServerKey {
                     let next_start = self.0.if_then_else_parallelized(
                         &in_pattern,
                         &self.0.scalar_sub_parallelized(start_x, 1),
-                        &start_y,
+                        start_y,
                     );
                     Some((self.add(count_x.as_ref(), count_y.as_ref()), next_start))
                 }
@@ -93,7 +93,7 @@ impl ServerKey {
                         }
                         (Some(count), Some(Number::Encrypted(mc))) => {
                             let count_not_reached = self.0.le_parallelized(&count, mc);
-                            let max_count_gt_zero = self.0.scalar_gt_parallelized(mc, 0 as u64);
+                            let max_count_gt_zero = self.0.scalar_gt_parallelized(mc, 0_u64);
                             Some(
                                 self.0
                                     .bitand_parallelized(&count_not_reached, &max_count_gt_zero),
@@ -195,7 +195,7 @@ impl ServerKey {
                     }
                     let next_count =
                         self.0
-                            .if_then_else_parallelized(&in_pattern, &count_x, &count_xy);
+                            .if_then_else_parallelized(&in_pattern, count_x, &count_xy);
 
                     let next_start = self.0.if_then_else_parallelized(
                         &in_pattern,
@@ -347,7 +347,7 @@ impl ServerKey {
             || {
                 to_pat_ref[..to_pat_ref.len() - 1]
                     .par_iter()
-                    .map(|x| self.0.scalar_ne_parallelized(x.as_ref(), 0 as u64))
+                    .map(|x| self.0.scalar_ne_parallelized(x.as_ref(), 0_u64))
                     .collect::<Vec<_>>()
             },
         );
@@ -390,7 +390,7 @@ impl ServerKey {
 
                     let mut next_count =
                         self.0
-                            .if_then_else_parallelized(&in_pattern, &count_x, &count_correct);
+                            .if_then_else_parallelized(&in_pattern, count_x, &count_correct);
                     let mut start_y_not_ended =
                         self.0.bitand_parallelized(&next_pattern, not_ended_y);
 
@@ -405,7 +405,7 @@ impl ServerKey {
 
                     let next_start_y = self.0.if_then_else_parallelized(
                         &start_y_not_ended,
-                        &start_y,
+                        start_y,
                         &self.false_ct(),
                     );
                     let next_start = self.0.if_then_else_parallelized(
@@ -462,7 +462,7 @@ impl ServerKey {
 
         for i in 0..max_len {
             let (to_fill, remaining_pat) = rayon::join(
-                || self.0.scalar_eq_parallelized(result[i].as_ref(), 0 as u64),
+                || self.0.scalar_eq_parallelized(result[i].as_ref(), 0_u64),
                 || self.0.scalar_gt_parallelized(&pattern_found_count, 0),
             );
             let cond = self.0.bitand_parallelized(&to_fill, &remaining_pat);

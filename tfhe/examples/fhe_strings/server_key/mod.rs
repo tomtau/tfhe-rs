@@ -490,7 +490,7 @@ impl ServerKey {
     #[inline]
     pub fn is_empty(&self, encrypted_str: &FheString<Padded>) -> FheBool {
         self.0
-            .scalar_eq_parallelized(&encrypted_str.as_ref()[0].as_ref(), 0)
+            .scalar_eq_parallelized(encrypted_str.as_ref()[0].as_ref(), 0)
     }
 
     /// Returns the length of `encrypted_str`.
@@ -527,25 +527,23 @@ impl ServerKey {
     ) -> dashmap::mapref::one::Ref<'a, usize, FheString<Padded>> {
         if let Some(s) = substrings.get(&n) {
             s
-        } else {
-            if let Some(s) = (n - 1..=n / 2).into_par_iter().find_map_any(|i| {
-                if let Some(s) = substrings.get(&i) {
-                    let prev = self.repeat_clear_rec(substrings, n - i);
-                    let concatted = self.concat(&prev, &s);
-                    substrings.insert(n, concatted);
-                    Some(substrings.get(&n).expect("just inserted"))
-                } else {
-                    None
-                }
-            }) {
-                s
-            } else {
-                let prev = self.repeat_clear_rec(substrings, n - 1);
-                let concatted =
-                    self.concat(&prev, &substrings.get(&1).expect("one should be inserted"));
+        } else if let Some(s) = (n - 1..=n / 2).into_par_iter().find_map_any(|i| {
+            if let Some(s) = substrings.get(&i) {
+                let prev = self.repeat_clear_rec(substrings, n - i);
+                let concatted = self.concat(&prev, &s);
                 substrings.insert(n, concatted);
-                return substrings.get(&n).expect("just inserted");
+                Some(substrings.get(&n).expect("just inserted"))
+            } else {
+                None
             }
+        }) {
+            s
+        } else {
+            let prev = self.repeat_clear_rec(substrings, n - 1);
+            let concatted =
+                self.concat(&prev, &substrings.get(&1).expect("one should be inserted"));
+            substrings.insert(n, concatted);
+            return substrings.get(&n).expect("just inserted");
         }
     }
 
@@ -597,10 +595,8 @@ impl ServerKey {
         let zero = self.false_ct();
 
         match n.into() {
-            Number::Clear(rep_l) if rep_l == 0 => {
-                FheString::new_unchecked(vec![self.false_ct().into()])
-            }
-            Number::Clear(rep_l) if rep_l == 1 => encrypted_str.clone(),
+            Number::Clear(0) => FheString::new_unchecked(vec![self.false_ct().into()]),
+            Number::Clear(1) => encrypted_str.clone(),
             Number::Clear(rep_l) if rep_l < 8 => {
                 // on M2, it seems to be faster to do this for smaller `n`
                 // even though concat isn't that optimized now
@@ -632,7 +628,7 @@ impl ServerKey {
                                 self.0
                                     .bitand_assign_parallelized(&mut cond, &not_reached_end);
                                 self.0
-                                    .if_then_else_parallelized(&cond, &str_ref[j].as_ref(), &zero)
+                                    .if_then_else_parallelized(&cond, str_ref[j].as_ref(), &zero)
                             })
                             .reduce(|| zero.clone(), |a, b| self.0.bitxor_parallelized(&a, &b))
                             .into()

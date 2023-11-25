@@ -74,9 +74,7 @@ impl ServerKey {
             Pattern::Clear(pat) => {
                 let starts_with = self.starts_with_clear_par(enc_ref, pat);
                 let pat_l = pat.len();
-                if str_l < pat_l {
-                    (starts_with, encrypted_str.clone())
-                } else if pat.is_empty() {
+                if str_l < pat_l || pat.is_empty() {
                     (starts_with, encrypted_str.clone())
                 } else {
                     let mut result = Vec::with_capacity(str_l);
@@ -312,7 +310,7 @@ impl ServerKey {
                   without modifying the original"]
     pub fn trim(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
         // TODO: do something better than this
-        self.trim_start(&self.trim_end(&encrypted_str))
+        self.trim_start(&self.trim_end(encrypted_str))
     }
 
     /// Returns a new [`FheString`] with trailing whitespace removed.
@@ -475,14 +473,14 @@ impl ServerKey {
                             &starts_with_ws,
                             &self
                                 .0
-                                .bitand_parallelized(&ws_before_boundary_x, &ws_before_boundary_y),
+                                .bitand_parallelized(ws_before_boundary_x, ws_before_boundary_y),
                         )
                     },
                     || self.0.add_parallelized(count_x, count_y),
                 );
                 let next_count =
                     self.0
-                        .if_then_else_parallelized(&boundary_not_hit, &count_xy, &count_x);
+                        .if_then_else_parallelized(&boundary_not_hit, &count_xy, count_x);
                 (boundary_not_hit, next_count)
             },
             (starts_with_ws.clone(), starts_with_ws.clone()),
