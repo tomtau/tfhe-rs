@@ -1,3 +1,59 @@
+use crate::ciphertext::{FheString, Padded, Pattern};
+use crate::server_key::ServerKey;
+
+use super::FheSplitResult;
+
+impl ServerKey {
+    /// An iterator over possible results of encrypted substrings of `encrypted_str`,
+    /// separated by characters matched by a pattern.
+    ///
+    /// The pattern can be a clear `&str` or an encrypted &FheString.
+    ///
+    /// Equivalent to [`split`], except that the trailing substring
+    /// is skipped if empty.
+    ///
+    /// [`split`]: ServerKey::split
+    ///
+    /// This method can be used for string data that is _terminated_,
+    /// rather than _separated_ by a pattern.
+    ///
+    /// # Iterator behavior
+    ///
+    /// If the pattern allows a reverse search but its results might differ
+    /// from a forward search, the [`rsplit_terminator`] method can be used.
+    ///
+    /// [`rsplit_terminator`]: ServerKey::rsplit_terminator
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s = client_key.encrypt_str("A.B.").unwrap();
+    /// assert_eq!(
+    ///     client_key.decrypt_split(server_key.split_terminator(s, ".")),
+    ///     vec!["A", "B"]
+    /// );
+    ///
+    /// let s = client_key.encrypt_str("A..B..").unwrap();
+    /// assert_eq!(
+    ///     client_key.decrypt_split(server_key.split_terminator(s, ".")),
+    ///     vec!["A", "", "B", ""]
+    /// );
+    /// ```
+    #[inline]
+    pub fn split_terminator<'a, P: Into<Pattern<'a, Padded>>>(
+        &'a self,
+        encrypted_str: &FheString<Padded>,
+        pat: P,
+    ) -> FheSplitResult {
+        let (pat_len, pattern_splits) = self.split_inner(encrypted_str, pat);
+        FheSplitResult::SplitTerminator(pat_len, pattern_splits)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;

@@ -1,3 +1,112 @@
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::slice::ParallelSlice;
+
+use crate::ciphertext::{FheOption, FheString, FheUsize, Padded, Pattern};
+use crate::server_key::ServerKey;
+
+impl ServerKey {
+    /// Returns an encrypted option (a tuple: a flag, i.e. encrypted `1`, and a byte index)
+    /// that contains the byte index for the first character of the first match of the pattern in
+    /// `encrypted_str`.
+    ///
+    /// Returns an encrypted `false` (`0` in the first tuple component) if the pattern doesn't
+    /// match.
+    ///
+    /// The pattern can be a clear `&str` or an encrypted &FheString.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let bananas = client_key.encrypt_str("bananas").unwrap();
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, "a")),
+    ///     Some(1)
+    /// );
+    /// let a = client_key.encrypt_str("a").unwrap();
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, a)),
+    ///     Some(1)
+    /// );
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, "z")),
+    ///     None
+    /// );
+    /// let z = client_key.encrypt_str("z").unwrap();
+    /// assert_eq!(
+    ///     client_key.decrypt_option_usize(&server_key.find(&bananas, z)),
+    ///     None
+    /// );
+    /// ```
+    /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
+    /// API not fully fleshed out and ready to be stabilized
+    /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
+    #[inline]
+    pub fn find<'a, P: Into<Pattern<'a, Padded>>>(
+        &self,
+        encrypted_str: &FheString<Padded>,
+        pat: P,
+    ) -> FheOption<FheUsize> {
+        match pat.into() {
+            Pattern::Clear(pat) => {
+                if pat.is_empty() {
+                    return (self.true_ct(), self.false_ct());
+                }
+                if pat.len() > encrypted_str.as_ref().len() {
+                    return (self.false_ct(), self.false_ct());
+                }
+                let fst = encrypted_str.as_ref();
+                let (found, index) = fst
+                    .par_windows(pat.len())
+                    .enumerate()
+                    .map(|(i, window)| {
+                        (
+                            Some(self.starts_with_clear_par(window, pat)),
+                            self.0.create_trivial_radix(i as u64, self.1),
+                        )
+                    })
+                    .reduce(
+                        || (None, self.0.create_trivial_radix(u64::MAX, self.1)),
+                        |(x_starts, x_i), (y_starts, y_i)| {
+                            rayon::join(
+                                || self.or(x_starts.as_ref(), y_starts.as_ref()),
+                                || self.if_then_else(x_starts.as_ref(), false, &x_i, &y_i),
+                            )
+                        },
+                    );
+                (found.unwrap_or_else(|| self.false_ct()), index)
+            }
+            Pattern::Encrypted(pat) => {
+                let snd = pat.as_ref();
+                if snd.len() < 2 {
+                    return (self.true_ct(), self.false_ct());
+                }
+                let fst = encrypted_str.as_ref();
+                (0..fst.len())
+                    .into_par_iter()
+                    .map(|i| {
+                        (
+                            self.starts_with_encrypted_par(&fst[i..], snd),
+                            self.0.create_trivial_radix(i as u64, self.1),
+                        )
+                    })
+                    .reduce(
+                        || (self.is_empty(pat), self.false_ct()),
+                        |(x_starts, x_i), (y_starts, y_i)| {
+                            rayon::join(
+                                || self.0.bitor_parallelized(&x_starts, &y_starts),
+                                || self.0.if_then_else_parallelized(&x_starts, &x_i, &y_i),
+                            )
+                        },
+                    )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
