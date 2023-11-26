@@ -3,7 +3,8 @@ mod strip_suffix;
 mod trim_end;
 mod trim_start;
 
-use crate::ciphertext::{FheString, Padded};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, Padded};
+use dashmap::DashMap;
 
 use super::ServerKey;
 
@@ -30,6 +31,32 @@ impl ServerKey {
     pub fn trim(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
         // TODO: do something better than this
         self.trim_start(&self.trim_end(encrypted_str))
+    }
+
+    #[inline]
+    fn check_whitespace(
+        &self,
+        cache_is_whitespace: &DashMap<usize, FheBool>,
+        i: usize,
+        window: &[FheAsciiChar],
+    ) -> (FheBool, FheBool) {
+        let left_whitespace = cache_is_whitespace
+            .get(&i)
+            .map(|v| v.clone())
+            .unwrap_or_else(|| {
+                let v = self.is_whitespace(&window[0]);
+                cache_is_whitespace.insert(i, v.clone());
+                v
+            });
+        let right_whitspace = cache_is_whitespace
+            .get(&(i + 1))
+            .map(|v| v.clone())
+            .unwrap_or_else(|| {
+                let v = self.is_whitespace(&window[1]);
+                cache_is_whitespace.insert(i + 1, v.clone());
+                v
+            });
+        (left_whitespace, right_whitspace)
     }
 }
 

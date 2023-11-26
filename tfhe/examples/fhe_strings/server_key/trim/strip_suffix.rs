@@ -1,4 +1,3 @@
-use dashmap::DashMap;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelExtend,
     ParallelIterator,
@@ -70,21 +69,11 @@ impl ServerKey {
                     return (self.true_ct(), encrypted_str.clone());
                 }
                 let fst = encrypted_str.as_ref();
-                let str_l = fst.len();
-                if pat.len() > str_l {
+                if pat.len() > fst.len() {
                     return (self.false_ct(), encrypted_str.clone());
                 }
-                let cache = DashMap::new();
-                let suffix_found = (0..str_l - pat.len())
-                    .into_par_iter()
-                    .map(|i| {
-                        Some(self.par_eq_clear_cached(
-                            i,
-                            &fst[i..std::cmp::min(i + pat.len() + 1, str_l)],
-                            pat,
-                            &cache,
-                        ))
-                    })
+                let suffix_found = self
+                    .find_clear_pattern_suffixes(fst, pat)
                     .chain(rayon::iter::repeatn(None, pat.len()));
                 let clear_mask: Vec<_> =
                     scan(suffix_found, |x, y| self.or(x.as_ref(), y.as_ref()), None).collect();
@@ -144,9 +133,9 @@ mod test {
     use crate::{client_key, server_key};
 
     #[test_matrix(
-        ["foo9bar", "foofoo", "banana"],
-        ["foo9", "bar", "ana"],
-        1..=3
+    ["foo9bar", "foofoo", "banana"],
+    ["foo9", "bar", "ana"],
+    1..=3
     )]
     fn test_strip_suffix(input: &str, pattern: &str, padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
@@ -167,7 +156,7 @@ mod test {
         assert_eq!(
             input.strip_suffix(pattern),
             client_key
-                .decrypt_option_str(&server_key.strip_suffix(&encrypted_str, &encrypted_pattern,))
+                .decrypt_option_str(&server_key.strip_suffix(&encrypted_str, &encrypted_pattern))
                 .as_deref()
         );
     }

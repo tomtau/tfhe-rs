@@ -1,5 +1,4 @@
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use rayon::slice::ParallelSlice;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::ciphertext::{FheOption, FheString, FheUsize, Padded, Pattern};
 use crate::server_key::ServerKey;
@@ -60,25 +59,7 @@ impl ServerKey {
                     return (self.false_ct(), self.false_ct());
                 }
                 let fst = encrypted_str.as_ref();
-                let (found, index) = fst
-                    .par_windows(pat.len())
-                    .enumerate()
-                    .map(|(i, window)| {
-                        (
-                            Some(self.starts_with_clear_par(window, pat)),
-                            self.0.create_trivial_radix(i as u64, self.1),
-                        )
-                    })
-                    .reduce(
-                        || (None, self.0.create_trivial_radix(u64::MAX, self.1)),
-                        |(x_starts, x_i), (y_starts, y_i)| {
-                            rayon::join(
-                                || self.or(x_starts.as_ref(), y_starts.as_ref()),
-                                || self.if_then_else(y_starts.as_ref(), false, &y_i, &x_i),
-                            )
-                        },
-                    );
-                (found.unwrap_or_else(|| self.false_ct()), index)
+                self.find_clear_pat_index(fst, pat, false)
             }
             Pattern::Encrypted(pat) => {
                 let snd = pat.as_ref();

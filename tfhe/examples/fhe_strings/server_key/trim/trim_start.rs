@@ -42,22 +42,8 @@ impl ServerKey {
         let starts_with_ws = self.is_whitespace(&fst[0]);
         cache_is_whitespace.insert(0, starts_with_ws.clone());
         let left_boundaries_ended = fst.par_windows(2).enumerate().map(|(i, window)| {
-            let left_whitespace = cache_is_whitespace
-                .get(&i)
-                .map(|v| v.clone())
-                .unwrap_or_else(|| {
-                    let v = self.is_whitespace(&window[0]);
-                    cache_is_whitespace.insert(i, v.clone());
-                    v
-                });
-            let right_whitespace = cache_is_whitespace
-                .get(&(i + 1))
-                .map(|v| v.clone())
-                .unwrap_or_else(|| {
-                    let v = self.is_whitespace(&window[1]);
-                    cache_is_whitespace.insert(i + 1, v.clone());
-                    v
-                });
+            let (left_whitespace, right_whitespace) =
+                self.check_whitespace(&cache_is_whitespace, i, window);
             (
                 self.0.bitor_parallelized(
                     &self.0.scalar_eq_parallelized(&left_whitespace, 0),

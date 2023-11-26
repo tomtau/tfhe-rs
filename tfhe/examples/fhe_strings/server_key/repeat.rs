@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
-use crate::ciphertext::{FheString, FheUsize, Number, Padded};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number, Padded};
 
 use super::ServerKey;
 
@@ -72,25 +72,13 @@ impl ServerKey {
                 (0..str_ref.len() * rep_l)
                     .into_par_iter()
                     .map(|i| {
-                        let mut enc_i: FheUsize = self.0.create_trivial_radix(i as u64, self.1);
-                        let len_mul = self.0.div_parallelized(&enc_i, &str_len);
-                        let (sub_comp, not_reached_end) = rayon::join(
-                            || self.0.mul_parallelized(&str_len, &len_mul),
-                            || self.0.scalar_lt_parallelized(&len_mul, rep_l as u64),
-                        );
-                        self.0.sub_assign_parallelized(&mut enc_i, &sub_comp);
-
-                        (0..str_ref.len())
-                            .into_par_iter()
-                            .map(|j| {
-                                let mut cond = self.0.scalar_eq_parallelized(&enc_i, j as u64);
-                                self.0
-                                    .bitand_assign_parallelized(&mut cond, &not_reached_end);
-                                self.0
-                                    .if_then_else_parallelized(&cond, str_ref[j].as_ref(), &zero)
-                            })
-                            .reduce(|| zero.clone(), |a, b| self.0.bitxor_parallelized(&a, &b))
-                            .into()
+                        self.duplicate_padded_str_char(
+                            str_ref,
+                            &zero,
+                            Number::Clear(rep_l),
+                            &str_len,
+                            i,
+                        )
                     })
                     .collect_into_vec(&mut result);
                 FheString::new_unchecked(result)
@@ -104,31 +92,52 @@ impl ServerKey {
                 (0..str_ref.len() * MAX_REP_L)
                     .into_par_iter()
                     .map(|i| {
-                        let mut enc_i: FheUsize = self.0.create_trivial_radix(i as u64, self.1);
-                        let len_mul = self.0.div_parallelized(&enc_i, &str_len);
-                        let (sub_comp, not_reached_end) = rayon::join(
-                            || self.0.mul_parallelized(&str_len, &len_mul),
-                            || self.0.lt_parallelized(&len_mul, &rep_l),
-                        );
-                        self.0.sub_assign_parallelized(&mut enc_i, &sub_comp);
-
-                        (0..str_ref.len())
-                            .into_par_iter()
-                            .map(|j| {
-                                let mut cond = self.0.scalar_eq_parallelized(&enc_i, j as u64);
-                                self.0
-                                    .bitand_assign_parallelized(&mut cond, &not_reached_end);
-                                self.0
-                                    .if_then_else_parallelized(&cond, str_ref[j].as_ref(), &zero)
-                            })
-                            .reduce(|| zero.clone(), |a, b| self.0.bitxor_parallelized(&a, &b))
-                            .into()
+                        self.duplicate_padded_str_char(
+                            str_ref,
+                            &zero,
+                            Number::Encrypted(rep_l.clone()),
+                            &str_len,
+                            i,
+                        )
                     })
                     .collect_into_vec(&mut result);
 
                 FheString::new_unchecked(result)
             }
         }
+    }
+
+    #[inline]
+    fn duplicate_padded_str_char(
+        &self,
+        str_ref: &[FheAsciiChar],
+        zero: &FheBool,
+        n: Number,
+        str_len: &FheUsize,
+        i: usize,
+    ) -> FheAsciiChar {
+        let mut enc_i: FheUsize = self.0.create_trivial_radix(i as u64, self.1);
+        let len_mul = self.0.div_parallelized(&enc_i, str_len);
+        let (sub_comp, not_reached_end) = rayon::join(
+            || self.0.mul_parallelized(str_len, &len_mul),
+            || match n {
+                Number::Clear(rep_l) => self.0.scalar_lt_parallelized(&len_mul, rep_l as u64),
+                Number::Encrypted(rep_l) => self.0.lt_parallelized(&len_mul, &rep_l),
+            },
+        );
+        self.0.sub_assign_parallelized(&mut enc_i, &sub_comp);
+
+        (0..str_ref.len())
+            .into_par_iter()
+            .map(|j| {
+                let mut cond = self.0.scalar_eq_parallelized(&enc_i, j as u64);
+                self.0
+                    .bitand_assign_parallelized(&mut cond, &not_reached_end);
+                self.0
+                    .if_then_else_parallelized(&cond, str_ref[j].as_ref(), zero)
+            })
+            .reduce(|| zero.clone(), |a, b| self.0.bitxor_parallelized(&a, &b))
+            .into()
     }
 
     fn repeat_clear_rec<'a>(

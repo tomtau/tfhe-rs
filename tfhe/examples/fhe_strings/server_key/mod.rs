@@ -18,6 +18,7 @@ use tfhe::integer::ServerKey as IntegerServerKey;
 
 use crate::ciphertext::{FheAsciiChar, FheBool, FheUsize};
 use crate::client_key::{ClientKey, PRECISION_BITS};
+use crate::scan::scan;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ServerKey(IntegerServerKey, usize);
@@ -218,5 +219,50 @@ impl ServerKey {
             })
             .reduce(|| None, |x, y| self.and_true(x.as_ref(), y.as_ref()))
             .unwrap_or_else(|| self.false_ct())
+    }
+
+    #[inline]
+    fn find_clear_pattern_suffixes<'a>(
+        &'a self,
+        fst: &'a [FheAsciiChar],
+        pat: &'a str,
+    ) -> impl ParallelIterator<Item = Option<FheBool>> + 'a {
+        let str_l = fst.len();
+        let pat_len = pat.len();
+        let cache = DashMap::new();
+        (0..str_l - pat_len).into_par_iter().map(move |i| {
+            Some(self.par_eq_clear_cached(
+                i,
+                &fst[i..std::cmp::min(i + pat_len + 1, str_l)],
+                pat,
+                &cache,
+            ))
+        })
+    }
+
+    #[inline]
+    fn accumulate_clear_pat_starts<
+        M: ParallelIterator<Item = Option<(Option<FheBool>, FheBool)>>,
+    >(
+        &self,
+        pattern_starts: M,
+    ) -> impl ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>> + '_ {
+        scan(
+            pattern_starts,
+            |x, y| match (x, y) {
+                (Some((count_x, start_x)), Some((count_y, start_y))) => {
+                    let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
+                    let next_start = self.0.if_then_else_parallelized(
+                        &in_pattern,
+                        &self.0.scalar_sub_parallelized(start_x, 1),
+                        start_y,
+                    );
+                    Some((self.add(count_x.as_ref(), count_y.as_ref()), next_start))
+                }
+                (None, y) => y.clone(),
+                (x, None) => x.clone(),
+            },
+            None,
+        )
     }
 }

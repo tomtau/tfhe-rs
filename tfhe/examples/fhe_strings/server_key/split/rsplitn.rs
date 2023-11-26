@@ -1,6 +1,6 @@
 use rayon::iter::{ParallelExtend, ParallelIterator};
 
-use crate::ciphertext::{FheBool, FheString, Number, Padded, Pattern};
+use crate::ciphertext::{FheBool, FheString, FheUsize, Number, Padded, Pattern};
 use crate::server_key::ServerKey;
 
 use super::{FhePatternLen, FheSplitResult, SplitFoundPattern};
@@ -65,7 +65,7 @@ impl ServerKey {
     }
 
     #[inline]
-    pub(crate) fn rsplitn_inner<'a, N: Into<Number>, P: Into<Pattern<'a, Padded>>>(
+    pub(super) fn rsplitn_inner<'a, N: Into<Number>, P: Into<Pattern<'a, Padded>>>(
         &self,
         encrypted_str: &FheString<Padded>,
         n: N,
@@ -105,29 +105,9 @@ impl ServerKey {
                         x.map(|(count, starts_y)| {
                             let (starts, (in_pattern, le_maxcount)) = rayon::join(
                                 || self.0.scalar_eq_parallelized(&starts_y, 1),
-                                || {
-                                    (
-                                        self.0.scalar_gt_parallelized(&starts_y, 0u64),
-                                        match (&max_count, count.as_ref()) {
-                                            (Number::Clear(mc), Some(c)) => {
-                                                Some(self.0.scalar_lt_parallelized(c, *mc as u64))
-                                            }
-                                            (Number::Encrypted(mc), Some(c)) => {
-                                                Some(self.0.lt_parallelized(c, mc))
-                                            }
-                                            _ => None,
-                                        },
-                                    )
-                                },
+                                || self.check_in_pattern_max_count(&max_count, count, &starts_y),
                             );
-                            if let Some(mc) = le_maxcount {
-                                rayon::join(
-                                    || self.0.bitand_parallelized(&starts, &mc),
-                                    || self.0.bitand_parallelized(&in_pattern, &mc),
-                                )
-                            } else {
-                                (starts, in_pattern)
-                            }
+                            self.check_le_max_count(starts, in_pattern, le_maxcount)
                         })
                     })
                     .collect::<Vec<_>>();
@@ -149,6 +129,40 @@ impl ServerKey {
                 )
             }
         }
+    }
+
+    #[inline]
+    pub(super) fn check_le_max_count(
+        &self,
+        starts: FheUsize,
+        in_pattern: FheUsize,
+        le_maxcount: Option<FheUsize>,
+    ) -> (FheUsize, FheUsize) {
+        if let Some(mc) = le_maxcount {
+            rayon::join(
+                || self.0.bitand_parallelized(&starts, &mc),
+                || self.0.bitand_parallelized(&in_pattern, &mc),
+            )
+        } else {
+            (starts, in_pattern)
+        }
+    }
+
+    #[inline]
+    pub(super) fn check_in_pattern_max_count(
+        &self,
+        max_count: &Number,
+        count: Option<FheUsize>,
+        starts_y: &FheUsize,
+    ) -> (FheUsize, Option<FheUsize>) {
+        (
+            self.0.scalar_gt_parallelized(starts_y, 0u64),
+            match (&max_count, count.as_ref()) {
+                (Number::Clear(mc), Some(c)) => Some(self.0.scalar_lt_parallelized(c, *mc as u64)),
+                (Number::Encrypted(mc), Some(c)) => Some(self.0.lt_parallelized(c, mc)),
+                _ => None,
+            },
+        )
     }
 }
 

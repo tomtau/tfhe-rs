@@ -133,28 +133,14 @@ impl ServerKey {
                             let (starts, (in_pattern, le_maxcount)) = rayon::join(
                                 || self.0.scalar_eq_parallelized(&starts_y, pat.len() as u64),
                                 || {
-                                    (
-                                        self.0.scalar_gt_parallelized(&starts_y, 0u64),
-                                        match (&adjust_max_count, count.as_ref()) {
-                                            (Number::Clear(mc), Some(c)) => {
-                                                Some(self.0.scalar_lt_parallelized(c, *mc as u64))
-                                            }
-                                            (Number::Encrypted(mc), Some(c)) => {
-                                                Some(self.0.lt_parallelized(c, mc))
-                                            }
-                                            _ => None,
-                                        },
+                                    self.check_in_pattern_max_count(
+                                        &adjust_max_count,
+                                        count,
+                                        &starts_y,
                                     )
                                 },
                             );
-                            if let Some(mc) = le_maxcount {
-                                rayon::join(
-                                    || self.0.bitand_parallelized(&starts, &mc),
-                                    || self.0.bitand_parallelized(&in_pattern, &mc),
-                                )
-                            } else {
-                                (starts, in_pattern)
-                            }
+                            self.check_le_max_count(starts, in_pattern, le_maxcount)
                         })
                     })
                     .collect::<Vec<_>>();

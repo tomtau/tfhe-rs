@@ -68,7 +68,7 @@ impl ServerKey {
     }
 
     #[inline]
-    pub(crate) fn rsplit_inner<'a, P: Into<Pattern<'a, Padded>>>(
+    pub(super) fn rsplit_inner<'a, P: Into<Pattern<'a, Padded>>>(
         &self,
         encrypted_str: &FheString<Padded>,
         pat: P,
@@ -113,7 +113,7 @@ impl ServerKey {
     }
 
     #[inline]
-    pub(crate) fn encrypted_rsplit(
+    pub(super) fn encrypted_rsplit(
         &self,
         str_len: usize,
         str_ref: &[FheAsciiChar],

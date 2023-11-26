@@ -38,22 +38,8 @@ impl ServerKey {
         }
         let cache_is_whitespace: DashMap<usize, FheBool> = DashMap::with_capacity(fst.len() - 1);
         let right_boundaries_ended = fst.par_windows(2).enumerate().map(|(i, window)| {
-            let left_whitespace = cache_is_whitespace
-                .get(&i)
-                .map(|v| v.clone())
-                .unwrap_or_else(|| {
-                    let v = self.is_whitespace(&window[0]);
-                    cache_is_whitespace.insert(i, v.clone());
-                    v
-                });
-            let right_whitespace = cache_is_whitespace
-                .get(&(i + 1))
-                .map(|v| v.clone())
-                .unwrap_or_else(|| {
-                    let v = self.is_whitespace(&window[1]);
-                    cache_is_whitespace.insert(i + 1, v.clone());
-                    v
-                });
+            let (left_whitespace, right_whitespace) =
+                self.check_whitespace(&cache_is_whitespace, i, window);
 
             (
                 Some(self.0.bitand_parallelized(

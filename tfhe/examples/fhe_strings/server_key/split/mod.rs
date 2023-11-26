@@ -173,32 +173,16 @@ impl ServerKey {
     fn clear_accumulated_starts<'a>(
         &'a self,
         str_len: usize,
-        str_ref: &[FheAsciiChar],
-        pat: &str,
-        max_count: Option<&Number>,
+        str_ref: &'a [FheAsciiChar],
+        pat: &'a str,
+        max_count: Option<&'a Number>,
     ) -> impl ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>> + 'a {
-        let pattern_starts = (0..str_len).into_par_iter().map(|i| {
+        let pattern_starts = (0..str_len).into_par_iter().map(move |i| {
             let starts = self.starts_with_clear_par(&str_ref[i..], pat);
             let starts_len = self.0.scalar_mul_parallelized(&starts, pat.len() as u64);
             Some((max_count.as_ref().map(|_| starts), starts_len))
         });
-        scan(
-            pattern_starts,
-            |x, y| match (x, y) {
-                (Some((count_x, start_x)), Some((count_y, start_y))) => {
-                    let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
-                    let next_start = self.0.if_then_else_parallelized(
-                        &in_pattern,
-                        &self.0.scalar_sub_parallelized(start_x, 1),
-                        start_y,
-                    );
-                    Some((self.add(count_x.as_ref(), count_y.as_ref()), next_start))
-                }
-                (None, y) => y.clone(),
-                (x, None) => x.clone(),
-            },
-            None,
-        )
+        self.accumulate_clear_pat_starts(pattern_starts)
     }
 
     #[inline]

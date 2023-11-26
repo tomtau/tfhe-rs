@@ -1,4 +1,3 @@
-use dashmap::DashMap;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::ciphertext::{FheBool, FheString, Padded, Pattern};
@@ -41,21 +40,10 @@ impl ServerKey {
                     return self.true_ct();
                 }
                 let fst = encrypted_str.as_ref();
-                let str_l = fst.len();
-                if pat.len() > str_l {
+                if pat.len() > fst.len() {
                     return self.false_ct();
                 }
-                let cache = DashMap::new();
-                (0..str_l - pat.len())
-                    .into_par_iter()
-                    .map(|i| {
-                        Some(self.par_eq_clear_cached(
-                            i,
-                            &fst[i..std::cmp::min(i + pat.len() + 1, str_l)],
-                            pat,
-                            &cache,
-                        ))
-                    })
+                self.find_clear_pattern_suffixes(fst, pat)
                     .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
                     .unwrap_or_else(|| self.false_ct())
             }

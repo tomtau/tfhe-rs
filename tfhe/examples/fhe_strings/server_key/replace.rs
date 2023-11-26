@@ -48,14 +48,7 @@ impl ServerKey {
         to_pat: &str,
         max_count: Option<Number>,
     ) -> FheString<Padded> {
-        let to_pat_enc: Vec<_> = to_pat
-            .as_bytes()
-            .par_iter()
-            .map(|x| {
-                self.0
-                    .create_trivial_radix::<u64, RadixCiphertext>(*x as u64, self.1)
-            })
-            .collect();
+        let to_pat_enc: Vec<_> = self.encrypt_clear_pat(to_pat);
         let pattern_starts = str_ref.par_windows(from_pat.len()).map(|window| {
             let starts = self.starts_with_clear_par(window, from_pat);
             let starts_len = self
@@ -63,53 +56,39 @@ impl ServerKey {
                 .scalar_mul_parallelized(&starts, from_pat.len() as u64);
             Some((max_count.as_ref().map(|_| starts), starts_len))
         });
-        let accumulated_starts: Vec<_> = scan(
-            pattern_starts,
-            |x, y| match (x, y) {
-                (Some((count_x, start_x)), Some((count_y, start_y))) => {
-                    let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
-                    let next_start = self.0.if_then_else_parallelized(
-                        &in_pattern,
-                        &self.0.scalar_sub_parallelized(start_x, 1),
-                        start_y,
-                    );
-                    Some((self.add(count_x.as_ref(), count_y.as_ref()), next_start))
-                }
-                (None, y) => y.clone(),
-                (x, None) => x.clone(),
-            },
-            None,
-        )
-        .flat_map(|x| {
-            x.map(|(count, starts)| {
-                let (basic_cond, extra_cond) = rayon::join(
-                    || {
-                        self.0
-                            .scalar_eq_parallelized(&starts, from_pat.len() as u64)
-                    },
-                    || match (count, max_count.as_ref()) {
-                        (Some(count), Some(Number::Clear(mc))) => {
-                            Some(self.0.scalar_le_parallelized(&count, *mc as u64))
-                        }
-                        (Some(count), Some(Number::Encrypted(mc))) => {
-                            let count_not_reached = self.0.le_parallelized(&count, mc);
-                            let max_count_gt_zero = self.0.scalar_gt_parallelized(mc, 0_u64);
-                            Some(
+        let accumulated_starts: Vec<_> =
+            self.accumulate_clear_pat_starts(pattern_starts)
+                .flat_map(|x| {
+                    x.map(|(count, starts)| {
+                        let (basic_cond, extra_cond) = rayon::join(
+                            || {
                                 self.0
-                                    .bitand_parallelized(&count_not_reached, &max_count_gt_zero),
-                            )
+                                    .scalar_eq_parallelized(&starts, from_pat.len() as u64)
+                            },
+                            || match (count, max_count.as_ref()) {
+                                (Some(count), Some(Number::Clear(mc))) => {
+                                    Some(self.0.scalar_le_parallelized(&count, *mc as u64))
+                                }
+                                (Some(count), Some(Number::Encrypted(mc))) => {
+                                    let count_not_reached = self.0.le_parallelized(&count, mc);
+                                    let max_count_gt_zero =
+                                        self.0.scalar_gt_parallelized(mc, 0_u64);
+                                    Some(self.0.bitand_parallelized(
+                                        &count_not_reached,
+                                        &max_count_gt_zero,
+                                    ))
+                                }
+                                _ => None,
+                            },
+                        );
+                        if let Some(cond) = extra_cond {
+                            self.0.bitand_parallelized(&basic_cond, &cond)
+                        } else {
+                            basic_cond
                         }
-                        _ => None,
-                    },
-                );
-                if let Some(cond) = extra_cond {
-                    self.0.bitand_parallelized(&basic_cond, &cond)
-                } else {
-                    basic_cond
-                }
-            })
-        })
-        .collect();
+                    })
+                })
+                .collect();
         let mut result = str_ref.to_vec();
         for (i, starts) in accumulated_starts.iter().enumerate() {
             for j in i..i + from_pat.len() {
@@ -120,6 +99,17 @@ impl ServerKey {
             }
         }
         FheString::new_unchecked(result)
+    }
+
+    #[inline]
+    fn encrypt_clear_pat(&self, pat: &str) -> Vec<RadixCiphertext> {
+        pat.as_bytes()
+            .par_iter()
+            .map(|x| {
+                self.0
+                    .create_trivial_radix::<u64, RadixCiphertext>(*x as u64, self.1)
+            })
+            .collect()
     }
 
     #[inline]
@@ -144,14 +134,7 @@ impl ServerKey {
             (str_ref.len() - 1) * (to_pat.len() - from_pat.len() + 1) + 1
         };
         let mut result = Vec::with_capacity(max_len);
-        let to_pat_enc: Vec<_> = to_pat
-            .as_bytes()
-            .par_iter()
-            .map(|x| {
-                self.0
-                    .create_trivial_radix::<u64, RadixCiphertext>(*x as u64, self.1)
-            })
-            .collect();
+        let to_pat_enc = self.encrypt_clear_pat(to_pat);
         let pattern_starts = (0..str_ref.len()).into_par_iter().map(|i| {
             let window = &str_ref[i..std::cmp::min(str_ref.len(), i + from_pat.len())];
             let mut starts = self.starts_with_clear_par(window, from_pat);
