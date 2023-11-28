@@ -11,6 +11,10 @@ mod le;
 mod ne;
 
 impl ServerKey {
+    /// A helper that compares two encrypted strings lexicographically.
+    /// (It assumes that `fst` and `snd` have the same length.)
+    /// The first component says if any characters were not equal.
+    /// The second component says if `fst` is lexicographically greater than `snd`.
     #[inline]
     fn par_ge(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> (Option<FheBool>, FheBool) {
         fst.par_iter()
@@ -39,6 +43,10 @@ impl ServerKey {
             )
     }
 
+    /// A helper that compares two encrypted strings lexicographically.
+    /// (It assumes that `fst` and `snd` have the same length.)
+    /// The first component says if any characters were not equal.
+    /// The second component says if `fst` is lexicographically smaller than `snd`.
     #[inline]
     fn par_le(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> (Option<FheBool>, FheBool) {
         fst.par_iter()
@@ -67,6 +75,8 @@ impl ServerKey {
             )
     }
 
+    /// A helper that checks that all elements of `fst` are not equal to `snd`.
+    /// (It assumes that `fst` and `snd` have the same length.)
     #[inline]
     fn par_ne(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> FheBool {
         fst.par_iter()
@@ -76,6 +86,9 @@ impl ServerKey {
             .unwrap_or_else(|| self.false_ct())
     }
 
+    /// A helper that checks that all elements of `fst` are not equal to zero.
+    /// (used for checking the equality of padded `FheString` where we don't
+    /// know the length of the string)
     #[inline]
     fn par_ne_zero(&self, fst: &[FheAsciiChar]) -> FheBool {
         fst.par_iter()
@@ -84,6 +97,9 @@ impl ServerKey {
             .unwrap_or_else(|| self.false_ct())
     }
 
+    /// A helper that checks that all elements of `fst` are equal to zero.
+    /// (used for checking the equality of padded `FheString` where we don't
+    /// know the length of the string)
     #[inline]
     fn par_eq_zero(&self, fst: &[FheAsciiChar]) -> FheBool {
         fst.par_iter()

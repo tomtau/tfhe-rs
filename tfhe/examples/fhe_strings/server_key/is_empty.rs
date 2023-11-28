@@ -1,4 +1,4 @@
-use crate::ciphertext::{FheBool, FheString, Padded};
+use crate::ciphertext::{FheBool, FheString, Padded, Unpadded};
 
 use super::ServerKey;
 
@@ -24,6 +24,16 @@ impl ServerKey {
         self.0
             .scalar_eq_parallelized(encrypted_str.as_ref()[0].as_ref(), 0)
     }
+
+    #[must_use]
+    #[inline]
+    pub fn is_empty_unpadded(&self, encrypted_str: &FheString<Unpadded>) -> FheBool {
+        if encrypted_str.as_ref().is_empty() {
+            self.false_ct()
+        } else {
+            self.true_ct()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -44,12 +54,8 @@ mod test {
 
         let input = "";
         let input2 = "not_empty";
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
-        let encrypted_str2 = client_key
-            .encrypt_str_padded(input2, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
+        let encrypted_str2 = client_key.encrypt_str_padded(input2, padding_len).unwrap();
 
         assert_eq!(
             input.is_empty(),

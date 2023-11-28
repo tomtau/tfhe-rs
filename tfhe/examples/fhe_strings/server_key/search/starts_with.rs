@@ -1,4 +1,4 @@
-use crate::ciphertext::{FheBool, FheString, Padded, Pattern};
+use crate::ciphertext::{FheBool, FheString, Padded, Pattern, Unpadded};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -39,6 +39,27 @@ impl ServerKey {
             }
         }
     }
+
+    pub fn starts_with_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
+        &self,
+        encrypted_str: &FheString<Unpadded>,
+        pat: P,
+    ) -> FheBool {
+        match pat.into() {
+            Pattern::Clear(pat) => self.starts_with_clear_par(encrypted_str.as_ref(), pat),
+            Pattern::Encrypted(pat) => {
+                let snd = pat.as_ref();
+                if snd.is_empty() {
+                    return self.true_ct();
+                }
+                let fst = encrypted_str.as_ref();
+                if snd.len() > fst.len() {
+                    return self.false_ct();
+                }
+                self.par_eq(fst, snd)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -54,16 +75,12 @@ mod test {
         ["bana", "nana"],
         1..=3
     )]
-    fn test_starts_with(input: &str, pattern: &str, padding_len: usize) {
+    fn test_starts_with_padded(input: &str, pattern: &str, padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
-        let encrypted_pattern = client_key
-            .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
+        let encrypted_pattern = client_key.encrypt_str_padded(pattern, padding_len).unwrap();
         assert_eq!(
             input.starts_with(pattern),
             client_key.decrypt_bool(&server_key.starts_with(&encrypted_str, pattern))
@@ -71,6 +88,27 @@ mod test {
         assert_eq!(
             input.starts_with(pattern),
             client_key.decrypt_bool(&server_key.starts_with(&encrypted_str, &encrypted_pattern))
+        );
+    }
+
+    #[test_matrix(
+        ["bananas"],
+        ["bana", "nana"]
+    )]
+    fn test_starts_with_unpadded(input: &str, pattern: &str) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        assert_eq!(
+            input.starts_with(pattern),
+            client_key.decrypt_bool(&server_key.starts_with_unpadded(&encrypted_str, pattern))
+        );
+        assert_eq!(
+            input.starts_with(pattern),
+            client_key
+                .decrypt_bool(&server_key.starts_with_unpadded(&encrypted_str, &encrypted_pattern))
         );
     }
 }

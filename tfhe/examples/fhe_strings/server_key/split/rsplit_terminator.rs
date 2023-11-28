@@ -50,6 +50,21 @@ impl ServerKey {
         pat: P,
     ) -> FheSplitResult {
         let (pat_len, pattern_splits) = self.rsplit_inner(encrypted_str, pat);
+        //	                      ______
+        //	                   <((((((\\\
+        //	                   /      . }\
+        //	                   ;--..--._|}
+        //	(\                 '--/\--'  )
+        //	 \\                | '-'  :'|
+        //	  \\               . -==- .-|
+        //	   \\               \.__.'   \--._
+        //	   [\\          __.--|       //  _/'--.
+        //	   \ \\       .'-._ ('-----'/ __/      \
+        //	    \ \\     /   __>|      | '--.       |
+        //	     \ \\   |   \   |     /    /       /
+        //	      \ '\ /     \  |     |  _/       /
+        //	       \  \       \ |     | /        /
+        //	 snd    \  \      \        /
         FheSplitResult::RSplitTerminator(pat_len, pattern_splits)
     }
 }
@@ -84,11 +99,9 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         let encrypted_split_pattern = client_key
-            .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+            .encrypt_str_padded(split_pattern, padding_len)
             .unwrap();
         println!("clear: {input} {split_pattern} {padding_len}");
         assert_eq!(

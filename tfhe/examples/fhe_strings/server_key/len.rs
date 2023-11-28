@@ -1,6 +1,6 @@
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::ciphertext::{FheString, FheUsize, Padded};
+use crate::ciphertext::{FheString, FheUsize, Padded, Unpadded};
 
 use super::ServerKey;
 
@@ -31,6 +31,13 @@ impl ServerKey {
             .reduce(|| None, |a, b| self.add(a.as_ref(), b.as_ref()))
             .unwrap_or_else(|| self.false_ct())
     }
+
+    #[must_use]
+    #[inline]
+    pub fn len_unpadded(&self, encrypted_str: &FheString<Unpadded>) -> FheUsize {
+        self.0
+            .create_trivial_radix(encrypted_str.as_ref().len() as u64, self.1)
+    }
 }
 
 #[cfg(test)]
@@ -50,9 +57,7 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
 
         assert_eq!(
             input.len(),

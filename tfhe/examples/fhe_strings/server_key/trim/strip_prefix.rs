@@ -3,7 +3,7 @@ use rayon::iter::{
     ParallelIterator,
 };
 
-use crate::ciphertext::{FheOption, FheString, Padded, Pattern};
+use crate::ciphertext::{FheOption, FheString, Padded, Pattern, Unpadded};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -157,6 +157,70 @@ impl ServerKey {
             }
         }
     }
+
+    pub fn strip_prefix_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
+        &self,
+        encrypted_str: &FheString<Unpadded>,
+        prefix: P,
+    ) -> FheOption<FheString<Padded>> {
+        let enc_ref = encrypted_str.as_ref();
+        let str_l = enc_ref.len();
+
+        match prefix.into() {
+            Pattern::Clear(pat) => {
+                let starts_with = self.starts_with_clear_par(enc_ref, pat);
+                let pat_l = pat.len();
+                if str_l < pat_l || pat.is_empty() {
+                    (starts_with, self.pad_string(encrypted_str))
+                } else {
+                    let zero = self.false_ct();
+                    let mut result = Vec::with_capacity(str_l);
+                    result.par_extend(enc_ref.par_iter().enumerate().map(|(i, c)| {
+                        if i + pat_l < str_l {
+                            self.0.if_then_else_parallelized(
+                                &starts_with,
+                                enc_ref[i + pat_l].as_ref(),
+                                c.as_ref(),
+                            )
+                        } else {
+                            self.0
+                                .if_then_else_parallelized(&starts_with, &zero, c.as_ref())
+                        }
+                        .into()
+                    }));
+                    result.push(zero.into());
+                    (starts_with, FheString::new_unchecked(result))
+                }
+            }
+            Pattern::Encrypted(pat) => {
+                let pat_l = pat.as_ref().len();
+
+                let starts_with = self.starts_with_unpadded(encrypted_str, Pattern::Encrypted(pat));
+
+                if str_l < pat_l || pat_l == 0 {
+                    (starts_with, self.pad_string(encrypted_str))
+                } else {
+                    let zero = self.false_ct();
+                    let mut result = Vec::with_capacity(str_l);
+                    result.par_extend(enc_ref.par_iter().enumerate().map(|(i, c)| {
+                        if i + pat_l < str_l {
+                            self.0.if_then_else_parallelized(
+                                &starts_with,
+                                enc_ref[i + pat_l].as_ref(),
+                                c.as_ref(),
+                            )
+                        } else {
+                            self.0
+                                .if_then_else_parallelized(&starts_with, &zero, c.as_ref())
+                        }
+                        .into()
+                    }));
+                    result.push(zero.into());
+                    (starts_with, FheString::new_unchecked(result))
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -172,26 +236,48 @@ mod test {
         ["foo9", "bar", "foo"],
         1..=3
     )]
-    fn test_strip_prefix(input: &str, pattern: &str, padding_len: usize) {
+    fn test_strip_prefix_padded(input: &str, pattern: &str, padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         assert_eq!(
             input.strip_prefix(pattern),
             client_key
                 .decrypt_option_str(&server_key.strip_prefix(&encrypted_str, pattern))
                 .as_deref()
         );
-        let encrypted_pattern = client_key
-            .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_pattern = client_key.encrypt_str_padded(pattern, padding_len).unwrap();
         assert_eq!(
             input.strip_prefix(pattern),
             client_key
                 .decrypt_option_str(&server_key.strip_prefix(&encrypted_str, &encrypted_pattern,))
+                .as_deref()
+        );
+    }
+
+    #[test_matrix(
+        ["foo9bar", "foofoo"],
+        ["foo9", "bar", "foo"]
+    )]
+    fn test_strip_prefix_unpadded(input: &str, pattern: &str) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        assert_eq!(
+            input.strip_prefix(pattern),
+            client_key
+                .decrypt_option_str(&server_key.strip_prefix_unpadded(&encrypted_str, pattern))
+                .as_deref()
+        );
+        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        assert_eq!(
+            input.strip_prefix(pattern),
+            client_key
+                .decrypt_option_str(
+                    &server_key.strip_prefix_unpadded(&encrypted_str, &encrypted_pattern,)
+                )
                 .as_deref()
         );
     }

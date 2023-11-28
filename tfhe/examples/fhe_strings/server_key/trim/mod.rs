@@ -76,9 +76,7 @@ mod test {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let s = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let s = client_key.encrypt_str_padded(input, padding_len).unwrap();
         assert_eq!(input.trim(), client_key.decrypt_str(&server_key.trim(&s)));
     }
 }

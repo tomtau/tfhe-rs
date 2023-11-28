@@ -1,3 +1,7 @@
+/// FIXME: use the official version from rayon
+/// when https://github.com/rayon-rs/rayon/pull/1036
+/// is merged
+/// Code by: Ariel Uy (https://github.com/arieluy)
 use std::collections::LinkedList;
 use std::usize;
 

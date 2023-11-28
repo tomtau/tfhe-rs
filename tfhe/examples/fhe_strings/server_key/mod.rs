@@ -16,7 +16,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tfhe::integer::ServerKey as IntegerServerKey;
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheUsize};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Padded, Unpadded};
 use crate::client_key::{ClientKey, PRECISION_BITS};
 use crate::scan::scan;
 
@@ -34,6 +34,8 @@ impl From<&ClientKey> for ServerKey {
 impl From<IntegerServerKey> for ServerKey {
     fn from(key: IntegerServerKey) -> Self {
         // FIXME: extract from `key` when the accessor is available.
+        // this is possible in the latest `main` of the `tfhe` crate repo.
+        // `fhe_strings-0.5-refactor` branch contains the WIP changes that uses it.
         const NUM_BLOCKS: usize = 4;
         Self(key, NUM_BLOCKS)
     }
@@ -44,6 +46,7 @@ impl From<IntegerServerKey> for ServerKey {
 const ASCII_WHITESPACES: [char; 6] = [' ', '\t', '\n', '\r', '\x0c', '\x0b'];
 
 impl ServerKey {
+    /// Returns an encrypted `true` (1) if `c` is ASCII whitespace.
     #[inline]
     fn is_whitespace(&self, c: &FheAsciiChar) -> FheBool {
         ASCII_WHITESPACES
@@ -53,16 +56,19 @@ impl ServerKey {
             .unwrap_or_else(|| self.false_ct())
     }
 
+    /// Returns an encrypted `true` (1) constant.
     #[inline]
     fn true_ct(&self) -> FheBool {
         self.0.create_trivial_radix(1, self.1)
     }
 
+    /// Returns an encrypted `false` (0) constant.
     #[inline]
     fn false_ct(&self) -> FheBool {
         self.0.create_trivial_zero_radix(self.1)
     }
 
+    /// Returns an encrypted `true` (1) if `encrypted_char` is in a given ASCII inclusive range.
     #[inline]
     fn check_scalar_range(&self, encrypted_char: &FheAsciiChar, start: u8, end: u8) -> FheBool {
         let (ge_from, le_to) = rayon::join(
@@ -75,6 +81,9 @@ impl ServerKey {
         self.0.bitand_parallelized(&ge_from, &le_to)
     }
 
+    /// A helper for `cmux` operations where the condition may be missing (due to the neutral None
+    /// value). If `cond` is `None`, `default_if_none` is used to determine the result (`opt_a`
+    /// if true).
     #[inline]
     fn if_then_else(
         &self,
@@ -90,6 +99,7 @@ impl ServerKey {
         }
     }
 
+    /// A helper for `Or` operations where one side may be missing (due to the neutral None value).
     #[inline]
     fn or(&self, a: Option<&FheBool>, b: Option<&FheBool>) -> Option<FheBool> {
         match (a, b) {
@@ -148,6 +158,7 @@ impl ServerKey {
             .into()
     }
 
+    /// Returns an encrypted `true` (1) if `enc_ref` starts with `pat`.
     #[inline]
     fn starts_with_clear_par(&self, enc_ref: &[FheAsciiChar], pat: &str) -> FheBool {
         if enc_ref.len() < pat.len() {
@@ -164,6 +175,7 @@ impl ServerKey {
         }
     }
 
+    /// Returns an encrypted `true` (1) if `enc_ref` starts with `pat`.
     #[inline]
     fn starts_with_encrypted_par(&self, enc_ref: &[FheAsciiChar], pat: &[FheAsciiChar]) -> FheBool {
         if pat.as_ref().len() < 2 {
@@ -187,6 +199,9 @@ impl ServerKey {
         }
     }
 
+    /// A helper that checks that two encrypted strings are a match
+    /// and returns an encrypted `true` (`1`) if they are.
+    /// This function assumes the string slices are of the same length.
     #[inline]
     fn par_eq(&self, fst: &[FheAsciiChar], snd: &[FheAsciiChar]) -> FheBool {
         fst.par_iter()
@@ -196,8 +211,51 @@ impl ServerKey {
             .unwrap_or_else(|| self.false_ct())
     }
 
+    /// A helper that checks that an encrypted character `x` at index `i`
+    /// is equal to a clear character `y` and returns an encrypted `true` (`1`) if they are.
+    /// (this uses a cache for overlapping patterns)
     #[inline]
-    fn par_eq_clear_cached(
+    fn char_eq_clear_check_cached(
+        &self,
+        i: usize,
+        x: &FheAsciiChar,
+        y: &u8,
+        cache: &DashMap<(usize, u8), FheBool>,
+    ) -> FheBool {
+        let key = (i, *y);
+        let result = cache.get(&key).map(|v| v.clone()).unwrap_or_else(|| {
+            let v = self.0.scalar_eq_parallelized(x.as_ref(), *y);
+            cache.insert(key, v.clone());
+            v
+        });
+        result
+    }
+
+    /// A helper that checks that that `fst` is equal to `snd`
+    /// and returns an encrypted `true` (`1`) if they are.
+    /// This function assumes the string slices are of the same length.
+    #[inline]
+    fn par_eq_clear_unpadded_cached(
+        &self,
+        start_index: usize,
+        fst: &[FheAsciiChar],
+        snd: &str,
+        cache: &DashMap<(usize, u8), FheBool>,
+    ) -> FheBool {
+        (start_index..start_index + fst.len())
+            .into_par_iter()
+            .zip(fst.par_iter())
+            .zip(snd.as_bytes().par_iter())
+            .map(|((i, x), y)| Some(self.char_eq_clear_check_cached(i, x, y, cache)))
+            .reduce(|| None, |x, y| self.and_true(x.as_ref(), y.as_ref()))
+            .unwrap_or_else(|| self.false_ct())
+    }
+
+    /// A helper that checks that that `fst` is equal to `snd`
+    /// and returns an encrypted `true` (`1`) if they are.
+    /// This function assumes the `fst` is padded with one zero.
+    #[inline]
+    fn par_eq_clear_padded_cached(
         &self,
         start_index: usize,
         fst: &[FheAsciiChar],
@@ -208,15 +266,7 @@ impl ServerKey {
             .into_par_iter()
             .zip(fst.par_iter())
             .zip(snd.as_bytes().par_iter().chain(rayon::iter::once(&0u8)))
-            .map(|((i, x), y)| {
-                let key = (i, *y);
-                let result = cache.get(&key).map(|v| v.clone()).unwrap_or_else(|| {
-                    let v = self.0.scalar_eq_parallelized(x.as_ref(), *y);
-                    cache.insert(key, v.clone());
-                    v
-                });
-                Some(result)
-            })
+            .map(|((i, x), y)| Some(self.char_eq_clear_check_cached(i, x, y, cache)))
             .reduce(|| None, |x, y| self.and_true(x.as_ref(), y.as_ref()))
             .unwrap_or_else(|| self.false_ct())
     }
@@ -231,7 +281,7 @@ impl ServerKey {
         let pat_len = pat.len();
         let cache = DashMap::new();
         (0..str_l - pat_len).into_par_iter().map(move |i| {
-            Some(self.par_eq_clear_cached(
+            Some(self.par_eq_clear_padded_cached(
                 i,
                 &fst[i..std::cmp::min(i + pat_len + 1, str_l)],
                 pat,
@@ -264,5 +314,13 @@ impl ServerKey {
             },
             None,
         )
+    }
+
+    #[inline]
+    fn pad_string(&self, unpadded: &FheString<Unpadded>) -> FheString<Padded> {
+        let str_ref = unpadded.as_ref();
+        let mut result = str_ref.to_vec();
+        result.push(self.false_ct().into());
+        FheString::new_unchecked(result)
     }
 }

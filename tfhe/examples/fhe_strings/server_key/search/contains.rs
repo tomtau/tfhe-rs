@@ -1,7 +1,8 @@
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use dashmap::DashMap;
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSlice;
 
-use crate::ciphertext::{FheBool, FheString, Padded, Pattern};
+use crate::ciphertext::{FheBool, FheString, Padded, Pattern, Unpadded};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -41,10 +42,11 @@ impl ServerKey {
                 if pat.is_empty() {
                     return self.true_ct();
                 }
-                if pat.len() > encrypted_str.as_ref().len() {
+                let fst = encrypted_str.as_ref();
+
+                if pat.len() > fst.len() {
                     return self.false_ct();
                 }
-                let fst = encrypted_str.as_ref();
                 fst.par_windows(pat.len())
                     .map(|window| Some(self.starts_with_clear_par(window, pat)))
                     .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
@@ -66,6 +68,49 @@ impl ServerKey {
             }
         }
     }
+
+    #[inline]
+    pub fn contains_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
+        &self,
+        encrypted_str: &FheString<Unpadded>,
+        pat: P,
+    ) -> FheBool {
+        match pat.into() {
+            Pattern::Clear(pat) => {
+                if pat.is_empty() {
+                    return self.true_ct();
+                }
+                let fst = encrypted_str.as_ref();
+
+                if pat.len() > fst.len() {
+                    return self.false_ct();
+                }
+                let cache = DashMap::new();
+                fst.par_windows(pat.len())
+                    .enumerate()
+                    .map(|(i, window)| {
+                        Some(self.par_eq_clear_unpadded_cached(i, window, pat, &cache))
+                    })
+                    .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
+                    .unwrap_or_else(|| self.false_ct())
+            }
+            Pattern::Encrypted(pat) => {
+                let snd = pat.as_ref();
+                if snd.is_empty() {
+                    return self.true_ct();
+                }
+                let fst = encrypted_str.as_ref();
+
+                if snd.len() > fst.len() {
+                    return self.false_ct();
+                }
+                fst.par_windows(snd.len())
+                    .map(|window| Some(self.par_eq(window, snd)))
+                    .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
+                    .unwrap_or_else(|| self.false_ct())
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -81,17 +126,13 @@ mod test {
         ["nana", "apples"],
         1..=3
     )]
-    fn test_contains(input: &str, pattern: &str, padding_len: usize) {
+    fn test_contains_padded(input: &str, pattern: &str, padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
-        let encrypted_pattern = client_key
-            .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
+        let encrypted_pattern = client_key.encrypt_str_padded(pattern, padding_len).unwrap();
         assert_eq!(
             input.contains(pattern),
             client_key.decrypt_bool(&server_key.contains(&encrypted_str, pattern))
@@ -99,6 +140,28 @@ mod test {
         assert_eq!(
             input.contains(pattern),
             client_key.decrypt_bool(&server_key.contains(&encrypted_str, &encrypted_pattern))
+        );
+    }
+
+    #[test_matrix(
+        ["bananas"],
+        ["nana", "apples"]
+    )]
+    fn test_contains_unpadded(input: &str, pattern: &str) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        assert_eq!(
+            input.contains(pattern),
+            client_key.decrypt_bool(&server_key.contains_unpadded(&encrypted_str, pattern))
+        );
+        assert_eq!(
+            input.contains(pattern),
+            client_key
+                .decrypt_bool(&server_key.contains_unpadded(&encrypted_str, &encrypted_pattern))
         );
     }
 }

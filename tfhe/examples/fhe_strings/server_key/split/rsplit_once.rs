@@ -67,12 +67,10 @@ mod test {
         let server_key = server_key::ServerKey::from(sk);
 
         let encrypted_split_pattern = client_key
-            .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+            .encrypt_str_padded(split_pattern, padding_len)
             .unwrap();
 
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         let rsplit_once = input.rsplit_once(split_pattern);
         let expected = if let Some((x, y)) = rsplit_once {
             vec![x, y]

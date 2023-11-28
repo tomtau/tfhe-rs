@@ -3,7 +3,7 @@ use rayon::iter::{
     ParallelIterator,
 };
 
-use crate::ciphertext::{FheString, Padded};
+use crate::ciphertext::{FheString, FheStringPadding, Padded, Unpadded};
 
 use super::ServerKey;
 
@@ -82,6 +82,19 @@ impl ServerKey {
                 .0,
         )
     }
+
+    pub fn concat_unpadded<P: FheStringPadding>(
+        &self,
+        encrypted_str: &FheString<Unpadded>,
+        other_encrypted_str: &FheString<P>,
+    ) -> FheString<P> {
+        let fst = encrypted_str.as_ref();
+        let snd = other_encrypted_str.as_ref();
+        let mut result = Vec::with_capacity(fst.len() + snd.len());
+        result.par_extend(fst.par_iter().cloned());
+        result.par_extend(snd.par_iter().cloned());
+        FheString::new_unchecked(result)
+    }
 }
 
 #[cfg(test)]
@@ -102,12 +115,8 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let s1 = client_key
-            .encrypt_str_padded(input_a, padding_len.try_into().unwrap())
-            .unwrap();
-        let s2 = client_key
-            .encrypt_str_padded(input_b, padding_len.try_into().unwrap())
-            .unwrap();
+        let s1 = client_key.encrypt_str_padded(input_a, padding_len).unwrap();
+        let s2 = client_key.encrypt_str_padded(input_b, padding_len).unwrap();
         assert_eq!(
             input_a.to_owned() + input_b,
             client_key.decrypt_str(&server_key.concat(&s1, &s2))

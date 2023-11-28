@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
-use std::num::NonZeroUsize;
 
+use rayon::iter::{IntoParallelIterator, ParallelExtend, ParallelIterator};
 use tfhe::integer::RadixCiphertext;
 
 use crate::client_key::ClientKey;
@@ -43,35 +43,58 @@ impl FheStringPadding for Padded {}
 #[derive(Clone)]
 pub struct FheString<P: FheStringPadding>(Vec<FheAsciiChar>, PhantomData<P>);
 
-impl FheString<Padded> {
+impl FheString<Unpadded> {
     pub fn new(
         client_key: &ClientKey,
         s: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        Self::new_with_padding(client_key, s, 1.try_into()?)
+        if !s.is_ascii() {
+            return Err("content contains non-ascii characters".into());
+        }
+        if s.contains('\0') {
+            return Err("content contains 0-character, use the padded version instead".into());
+        }
+        let enc_s: Vec<FheAsciiChar> = s
+            .as_bytes()
+            .into_par_iter()
+            .map(|byte| client_key.encrypt_byte(*byte))
+            .collect();
+        Ok(Self(enc_s, PhantomData {}))
     }
+}
 
+impl<P: FheStringPadding> FheString<P> {
+    pub(crate) fn new_unchecked(enc_s: Vec<FheAsciiChar>) -> Self {
+        Self(enc_s, PhantomData {})
+    }
+}
+
+impl FheString<Padded> {
     pub fn new_with_padding(
         client_key: &ClientKey,
         s: &str,
-        padding_len: NonZeroUsize,
+        padding_len: usize,
     ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         if !s.is_ascii() {
             return Err("content contains non-ascii characters".into());
         }
+        if padding_len == 0 {
+            return Err(
+                "padding length must be greater than 0 (for the unpadded version, use `new`)"
+                    .into(),
+            );
+        }
         let mut enc_s: Vec<FheAsciiChar> = s
             .as_bytes()
-            .iter()
+            .into_par_iter()
             .map(|byte| client_key.encrypt_byte(*byte))
             .collect();
-        for _ in 0..padding_len.get() {
-            enc_s.push(client_key.encrypt_byte(0));
-        }
+        enc_s.par_extend(
+            (0..padding_len)
+                .into_par_iter()
+                .map(|_| client_key.encrypt_byte(0)),
+        );
         Ok(Self(enc_s, PhantomData {}))
-    }
-
-    pub(crate) fn new_unchecked(enc_s: Vec<FheAsciiChar>) -> Self {
-        Self(enc_s, PhantomData {})
     }
 }
 

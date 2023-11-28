@@ -1,5 +1,6 @@
 use crate::ciphertext::{FheAsciiChar, FheOption, FheUsize};
 use crate::server_key::ServerKey;
+use dashmap::DashMap;
 use rayon::prelude::*;
 
 mod contains;
@@ -9,6 +10,10 @@ mod rfind;
 mod starts_with;
 
 impl ServerKey {
+    /// A helper that finds the first occurrence of the given pattern in the given encrypted string.
+    /// Returns a tuple: a flag, i.e. encrypted `1` (true/Some) or `0` (false/None), and a byte
+    /// index. If `left_match` is true, the index is the index of the first match.
+    /// If `left_match` is false, the index is the index of the last match.
     #[inline]
     fn find_clear_pat_index(
         &self,
@@ -16,12 +21,13 @@ impl ServerKey {
         pat: &str,
         left_match: bool,
     ) -> FheOption<FheUsize> {
+        let cache = DashMap::new();
         let (found, index) = fst
             .par_windows(pat.len())
             .enumerate()
             .map(|(i, window)| {
                 (
-                    Some(self.starts_with_clear_par(window, pat)),
+                    Some(self.par_eq_clear_unpadded_cached(i, window, pat, &cache)),
                     self.0.create_trivial_radix(i as u64, self.1),
                 )
             })

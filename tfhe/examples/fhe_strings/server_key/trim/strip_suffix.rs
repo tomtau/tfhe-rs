@@ -3,7 +3,7 @@ use rayon::iter::{
     ParallelIterator,
 };
 
-use crate::ciphertext::{FheOption, FheString, Padded, Pattern};
+use crate::ciphertext::{FheOption, FheString, Padded, Pattern, Unpadded};
 use crate::scan::scan;
 use crate::server_key::ServerKey;
 
@@ -122,6 +122,65 @@ impl ServerKey {
             }
         }
     }
+
+    pub fn strip_suffix_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
+        &self,
+        encrypted_str: &FheString<Unpadded>,
+        suffix: P,
+    ) -> FheOption<FheString<Padded>> {
+        match suffix.into() {
+            Pattern::Clear(pat) => {
+                if pat.is_empty() {
+                    return (self.true_ct(), self.pad_string(encrypted_str));
+                }
+                let fst = encrypted_str.as_ref();
+                if pat.len() > fst.len() {
+                    return (self.false_ct(), self.pad_string(encrypted_str));
+                }
+                let suffix_start = fst.len() - pat.len();
+                let suffix_found = self.starts_with_clear_par(&fst[suffix_start..], pat);
+                let zero = self.false_ct();
+                let mut result = Vec::with_capacity(fst.len());
+                result.par_extend(fst.par_iter().enumerate().map(|(i, c)| {
+                    if i < suffix_start {
+                        c.clone()
+                    } else {
+                        self.0
+                            .if_then_else_parallelized(&suffix_found, &zero, c.as_ref())
+                            .into()
+                    }
+                }));
+                result.push(zero.into());
+                (suffix_found, FheString::new_unchecked(result))
+            }
+            Pattern::Encrypted(pat) => {
+                let snd = pat.as_ref();
+                if snd.is_empty() {
+                    return (self.true_ct(), self.pad_string(encrypted_str));
+                }
+                let fst = encrypted_str.as_ref();
+                if snd.len() > fst.len() {
+                    return (self.false_ct(), self.pad_string(encrypted_str));
+                }
+                let fst = encrypted_str.as_ref();
+                let suffix_start = fst.len() - snd.len();
+                let suffix_found = self.par_eq(&fst[suffix_start..], snd);
+                let zero = self.false_ct();
+                let mut result = Vec::with_capacity(fst.len());
+                result.par_extend(fst.par_iter().enumerate().map(|(i, c)| {
+                    if i < suffix_start {
+                        c.clone()
+                    } else {
+                        self.0
+                            .if_then_else_parallelized(&suffix_found, &zero, c.as_ref())
+                            .into()
+                    }
+                }));
+                result.push(zero.into());
+                (suffix_found, FheString::new_unchecked(result))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -133,30 +192,52 @@ mod test {
     use crate::{client_key, server_key};
 
     #[test_matrix(
-    ["foo9bar", "foofoo", "banana"],
-    ["foo9", "bar", "ana"],
-    1..=3
+        ["foo9bar", "foofoo", "banana"],
+        ["foo9", "bar", "ana"],
+        1..=3
     )]
-    fn test_strip_suffix(input: &str, pattern: &str, padding_len: usize) {
+    fn test_strip_suffix_padded(input: &str, pattern: &str, padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         assert_eq!(
             input.strip_suffix(pattern),
             client_key
                 .decrypt_option_str(&server_key.strip_suffix(&encrypted_str, pattern))
                 .as_deref()
         );
-        let encrypted_pattern = client_key
-            .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_pattern = client_key.encrypt_str_padded(pattern, padding_len).unwrap();
         assert_eq!(
             input.strip_suffix(pattern),
             client_key
                 .decrypt_option_str(&server_key.strip_suffix(&encrypted_str, &encrypted_pattern))
+                .as_deref()
+        );
+    }
+
+    #[test_matrix(
+        ["foo9bar", "foofoo", "banana"],
+        ["foo9", "bar", "ana"]
+    )]
+    fn test_strip_suffix_unpadded(input: &str, pattern: &str) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        assert_eq!(
+            input.strip_suffix(pattern),
+            client_key
+                .decrypt_option_str(&server_key.strip_suffix_unpadded(&encrypted_str, pattern))
+                .as_deref()
+        );
+        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        assert_eq!(
+            input.strip_suffix(pattern),
+            client_key
+                .decrypt_option_str(
+                    &server_key.strip_suffix_unpadded(&encrypted_str, &encrypted_pattern)
+                )
                 .as_deref()
         );
     }

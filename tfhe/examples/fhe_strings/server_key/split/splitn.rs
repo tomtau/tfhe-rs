@@ -178,11 +178,9 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         let encrypted_split_pattern = client_key
-            .encrypt_str_padded(split_pattern, padding_len.try_into().unwrap())
+            .encrypt_str_padded(split_pattern, padding_len)
             .unwrap();
         let encrypted_n = client_key.encrypt_usize(n);
         println!("clear clear: {input} {split_pattern} {padding_len} {n}");

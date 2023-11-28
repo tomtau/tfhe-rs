@@ -90,7 +90,7 @@ fn main() -> io::Result<()> {
             Error::new(io::ErrorKind::Other, e)
         })?;
         let encrypted_str2 = client_key
-            .encrypt_str_padded(&input_string2, 2usize.try_into().unwrap())
+            .encrypt_str_padded(&input_string2, 2)
             .map_err(|e| {
                 error!("Failed to encrypt input string2: {e}");
                 Error::new(io::ErrorKind::Other, e)

@@ -1,6 +1,6 @@
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::prelude::*;
 
-use crate::ciphertext::{FheOption, FheString, FheUsize, Padded, Pattern};
+use crate::ciphertext::{FheOption, FheString, FheUsize, Padded, Pattern, Unpadded};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -86,6 +86,50 @@ impl ServerKey {
             }
         }
     }
+
+    #[inline]
+    pub fn find_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
+        &self,
+        encrypted_str: &FheString<Unpadded>,
+        pat: P,
+    ) -> FheOption<FheUsize> {
+        match pat.into() {
+            Pattern::Clear(pat) => {
+                if pat.is_empty() {
+                    return (self.true_ct(), self.false_ct());
+                }
+                if pat.len() > encrypted_str.as_ref().len() {
+                    return (self.false_ct(), self.false_ct());
+                }
+                let fst = encrypted_str.as_ref();
+                self.find_clear_pat_index(fst, pat, true)
+            }
+            Pattern::Encrypted(pat) => {
+                let snd = pat.as_ref();
+                if snd.is_empty() {
+                    return (self.true_ct(), self.false_ct());
+                }
+                let fst = encrypted_str.as_ref();
+                fst.par_windows(snd.len())
+                    .enumerate()
+                    .map(|(i, window)| {
+                        (
+                            self.par_eq(window, snd),
+                            self.0.create_trivial_radix(i as u64, self.1),
+                        )
+                    })
+                    .reduce(
+                        || (self.false_ct(), self.false_ct()),
+                        |(x_starts, x_i), (y_starts, y_i)| {
+                            rayon::join(
+                                || self.0.bitor_parallelized(&x_starts, &y_starts),
+                                || self.0.if_then_else_parallelized(&x_starts, &x_i, &y_i),
+                            )
+                        },
+                    )
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -101,16 +145,12 @@ mod test {
         ["a", "z"],
         1..=3
     )]
-    fn test_find(input: &str, pattern: &str, padding_len: usize) {
+    fn test_find_padded(input: &str, pattern: &str, padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
-        let encrypted_pattern = client_key
-            .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
+        let encrypted_pattern = client_key.encrypt_str_padded(pattern, padding_len).unwrap();
         assert_eq!(
             input.find(pattern),
             client_key.decrypt_option_usize(&server_key.find(&encrypted_str, pattern))
@@ -118,6 +158,28 @@ mod test {
         assert_eq!(
             input.find(pattern),
             client_key.decrypt_option_usize(&server_key.find(&encrypted_str, &encrypted_pattern))
+        );
+    }
+
+    #[test_matrix(
+        ["bananas"],
+        ["a", "z"]
+    )]
+    fn test_find_unpadded(input: &str, pattern: &str) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        assert_eq!(
+            input.find(pattern),
+            client_key.decrypt_option_usize(&server_key.find_unpadded(&encrypted_str, pattern))
+        );
+        assert_eq!(
+            input.find(pattern),
+            client_key.decrypt_option_usize(
+                &server_key.find_unpadded(&encrypted_str, &encrypted_pattern)
+            )
         );
     }
 }

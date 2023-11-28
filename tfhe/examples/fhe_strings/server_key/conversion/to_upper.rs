@@ -1,6 +1,6 @@
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::ciphertext::{FheString, Padded};
+use crate::ciphertext::{FheString, FheStringPadding};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -32,7 +32,7 @@ impl ServerKey {
     /// ```
     #[must_use = "this returns the uppercase string as a new FheString, \
                       without modifying the original"]
-    pub fn to_uppercase(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
+    pub fn to_uppercase<P: FheStringPadding>(&self, encrypted_str: &FheString<P>) -> FheString<P> {
         FheString::new_unchecked(
             encrypted_str
                 .as_ref()
@@ -41,7 +41,10 @@ impl ServerKey {
                     // 'a' == 97, 'z' == 122
                     let (is_lower, converted) = rayon::join(
                         || self.check_scalar_range(x, 97, 122),
-                        || self.0.scalar_sub_parallelized(x.as_ref(), 32),
+                        || {
+                            self.0
+                                .scalar_sub_parallelized(x.as_ref(), ServerKey::ASCII_CASE_SHIFT)
+                        },
                     );
                     // (is_lower & converted) | (!is_lower & x)
                     self.0
@@ -65,14 +68,27 @@ mod test {
         ["HELLO", "hell"],
         1..=3
     )]
-    fn test_to_uppercase(input: &str, padding_len: usize) {
+    fn test_to_uppercase_padded(input: &str, padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
+        assert_eq!(
+            input.to_uppercase(),
+            client_key.decrypt_str(&server_key.to_uppercase(&encrypted_str))
+        );
+    }
+
+    #[test_matrix(
+        ["HELLO", "hell"]
+    )]
+    fn test_to_uppercase_unpadded(input: &str) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
         assert_eq!(
             input.to_uppercase(),
             client_key.decrypt_str(&server_key.to_uppercase(&encrypted_str))

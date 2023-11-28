@@ -108,9 +108,7 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let s = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let s = client_key.encrypt_str_padded(input, padding_len).unwrap();
         assert_eq!(
             input.trim_end(),
             client_key.decrypt_str(&server_key.trim_end(&s))

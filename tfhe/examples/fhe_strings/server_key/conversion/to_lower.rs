@@ -1,6 +1,6 @@
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::ciphertext::{FheString, Padded};
+use crate::ciphertext::{FheString, FheStringPadding};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -32,22 +32,12 @@ impl ServerKey {
     /// ```
     #[must_use = "this returns the lowercase string as a new FheString, \
                       without modifying the original"]
-    pub fn to_lowercase(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
+    pub fn to_lowercase<P: FheStringPadding>(&self, encrypted_str: &FheString<P>) -> FheString<P> {
         FheString::new_unchecked(
             encrypted_str
                 .as_ref()
                 .par_iter()
-                .map(|x| {
-                    // 'A' == 65, 'Z' == 90
-                    let (is_upper, converted) = rayon::join(
-                        || self.check_scalar_range(x, 65, 90),
-                        || self.0.scalar_add_parallelized(x.as_ref(), 32),
-                    );
-                    // (is_upper & converted) | (!is_upper & x)
-                    self.0
-                        .if_then_else_parallelized(&is_upper, &converted, x.as_ref())
-                        .into()
-                })
+                .map(|x| self.char_to_lower(x))
                 .collect(),
         )
     }
@@ -65,14 +55,27 @@ mod test {
         ["HELLO", "hell"],
         1..=3
     )]
-    fn test_to_lowercase(input: &str, padding_len: usize) {
+    fn test_to_lowercase_padded(input: &str, padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
+        assert_eq!(
+            input.to_lowercase(),
+            client_key.decrypt_str(&server_key.to_lowercase(&encrypted_str))
+        );
+    }
+
+    #[test_matrix(
+        ["HELLO", "hell"]
+    )]
+    fn test_to_lowercase_unpadded(input: &str) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
         assert_eq!(
             input.to_lowercase(),
             client_key.decrypt_str(&server_key.to_lowercase(&encrypted_str))

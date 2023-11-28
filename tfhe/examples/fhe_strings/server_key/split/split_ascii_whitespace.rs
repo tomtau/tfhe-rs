@@ -96,9 +96,7 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         assert_eq!(
             input.split_ascii_whitespace().collect::<Vec<_>>(),
             client_key.decrypt_split(server_key.split_ascii_whitespace(&encrypted_str))

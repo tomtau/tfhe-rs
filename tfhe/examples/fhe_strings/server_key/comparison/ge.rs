@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::ciphertext::{FheBool, FheString, Padded};
+use crate::ciphertext::{FheBool, FheString, Padded, Unpadded};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -62,6 +62,32 @@ impl ServerKey {
             }
         }
     }
+
+    #[inline]
+    #[must_use]
+    pub fn ge_unpadded(
+        &self,
+        encrypted_str: &FheString<Unpadded>,
+        other_encrypted_str: &FheString<Unpadded>,
+    ) -> FheBool {
+        let fst = encrypted_str.as_ref();
+        let snd = other_encrypted_str.as_ref();
+        match fst.len().cmp(&snd.len()) {
+            Ordering::Less => {
+                let (any_ne, leftmost_gt) = self.par_ge(fst, &snd[..fst.len()]);
+
+                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.false_ct())
+            }
+            Ordering::Equal => {
+                let (any_ne, leftmost_gt) = self.par_ge(fst, snd);
+                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
+            }
+            Ordering::Greater => {
+                let (any_ne, leftmost_gt) = self.par_ge(&fst[..snd.len()], snd);
+                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -77,17 +103,13 @@ mod test {
         ["B", "ana", "apples", "ban", "bbn"],
         1..=3
     )]
-    fn test_ge(input_a: &str, input_b: &str, padding_len: usize) {
+    fn test_ge_padded(input_a: &str, input_b: &str, padding_len: usize) {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let s1 = client_key
-            .encrypt_str_padded(input_a, padding_len.try_into().unwrap())
-            .unwrap();
-        let s2 = client_key
-            .encrypt_str_padded(input_b, padding_len.try_into().unwrap())
-            .unwrap();
+        let s1 = client_key.encrypt_str_padded(input_a, padding_len).unwrap();
+        let s2 = client_key.encrypt_str_padded(input_b, padding_len).unwrap();
         assert_eq!(
             input_a >= input_b,
             client_key.decrypt_bool(&server_key.ge(&s1, &s2))
@@ -99,6 +121,31 @@ mod test {
         assert_eq!(
             input_b >= input_a,
             client_key.decrypt_bool(&server_key.ge(&s2, &s1))
+        );
+    }
+
+    #[test_matrix(
+        ["A", "bananas"],
+        ["B", "ana", "apples", "ban", "bbn"]
+    )]
+    fn test_ge_unpadded(input_a: &str, input_b: &str) {
+        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let client_key = client_key::ClientKey::from(ck);
+        let server_key = server_key::ServerKey::from(sk);
+
+        let s1 = client_key.encrypt_str_unpadded(input_a).unwrap();
+        let s2 = client_key.encrypt_str_unpadded(input_b).unwrap();
+        assert_eq!(
+            input_a >= input_b,
+            client_key.decrypt_bool(&server_key.ge_unpadded(&s1, &s2))
+        );
+        assert_eq!(
+            input_a >= input_a,
+            client_key.decrypt_bool(&server_key.ge_unpadded(&s1, &s1))
+        );
+        assert_eq!(
+            input_b >= input_a,
+            client_key.decrypt_bool(&server_key.ge_unpadded(&s2, &s1))
         );
     }
 }

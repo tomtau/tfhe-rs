@@ -673,20 +673,16 @@ mod test {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         println!("clear: {input} {pattern} {replacement} {padding_len}");
 
         assert_eq!(
             input.replace(pattern, replacement),
             client_key.decrypt_str(&server_key.replace(&encrypted_str, pattern, replacement))
         );
-        let encrypted_pattern = client_key
-            .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_pattern = client_key.encrypt_str_padded(pattern, padding_len).unwrap();
         let encrypted_replacement = client_key
-            .encrypt_str_padded(replacement, padding_len.try_into().unwrap())
+            .encrypt_str_padded(replacement, padding_len)
             .unwrap();
         println!("encrypted: {input} {pattern} {replacement} {padding_len}");
         assert_eq!(
@@ -755,9 +751,7 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key
-            .encrypt_str_padded(input, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         let encrypted_n = client_key.encrypt_usize(n);
         println!("clear clear: {input} {pattern} {replacement} {padding_len} {n}");
         assert_eq!(
@@ -774,11 +768,9 @@ mod test {
                 encrypted_n.clone()
             ))
         );
-        let encrypted_pattern = client_key
-            .encrypt_str_padded(pattern, padding_len.try_into().unwrap())
-            .unwrap();
+        let encrypted_pattern = client_key.encrypt_str_padded(pattern, padding_len).unwrap();
         let encrypted_replacement = client_key
-            .encrypt_str_padded(replacement, padding_len.try_into().unwrap())
+            .encrypt_str_padded(replacement, padding_len)
             .unwrap();
         println!("encrypted clear: {input} {pattern} {replacement} {padding_len} {n}");
         assert_eq!(

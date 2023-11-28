@@ -1,10 +1,10 @@
-use std::num::NonZeroUsize;
-
 use serde::{Deserialize, Serialize};
 use tfhe::integer::{gen_keys, ClientKey as IntegerClientKey};
 use tfhe::shortint::ShortintParameterSet;
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Padded};
+use crate::ciphertext::{
+    FheAsciiChar, FheBool, FheOption, FheString, FheStringPadding, FheUsize, Padded, Unpadded,
+};
 use crate::server_key::{FhePatternLen, FheSplitResult};
 
 pub(crate) const PRECISION_BITS: usize = 8;
@@ -113,25 +113,32 @@ impl ClientKey {
         result
     }
 
+    pub fn encrypt_str_unpadded(
+        &self,
+        s: &str,
+    ) -> Result<FheString<Unpadded>, Box<dyn std::error::Error + Sync + Send>> {
+        FheString::new(self, s)
+    }
+
     pub fn encrypt_str(
         &self,
         s: &str,
     ) -> Result<FheString<Padded>, Box<dyn std::error::Error + Sync + Send>> {
-        FheString::new(self, s)
+        FheString::new_with_padding(self, s, 1) // FIXME: unpadded
     }
 
     pub fn encrypt_str_padded(
         &self,
         s: &str,
-        padding_len: NonZeroUsize,
+        padding_len: usize,
     ) -> Result<FheString<Padded>, Box<dyn std::error::Error + Sync + Send>> {
         FheString::new_with_padding(self, s, padding_len)
     }
 
-    pub fn decrypt_str(&self, s: &FheString<Padded>) -> String {
+    pub fn decrypt_str<P: FheStringPadding>(&self, s: &FheString<P>) -> String {
         String::from_iter(s.as_ref().iter().map_while(|byte| {
             let b: u64 = self.0.decrypt_radix(byte.as_ref());
-            if b > 0 && b < 255 {
+            if b > 0 && b <= 255 {
                 Some(b as u8 as char)
             } else {
                 None
