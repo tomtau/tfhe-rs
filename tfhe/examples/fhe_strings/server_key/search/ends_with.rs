@@ -43,7 +43,7 @@ impl ServerKey {
                 if pat.len() > fst.len() {
                     return self.false_ct();
                 }
-                self.find_clear_pattern_suffixes(fst, pat)
+                self.find_clear_pattern_padded_suffixes(fst, pat)
                     .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
                     .unwrap_or_else(|| self.false_ct())
             }

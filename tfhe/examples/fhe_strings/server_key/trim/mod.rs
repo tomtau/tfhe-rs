@@ -33,6 +33,9 @@ impl ServerKey {
         self.trim_start(&self.trim_end(encrypted_str))
     }
 
+    /// A helper that checks the if encrypted chars at (i, i+1),
+    /// i.e. window[0], window[1], are ASCII whitespace.
+    /// it uses a cache to avoid re-computing the same thing.
     #[inline]
     fn check_whitespace(
         &self,

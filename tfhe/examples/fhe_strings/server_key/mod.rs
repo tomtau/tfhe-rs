@@ -110,6 +110,7 @@ impl ServerKey {
         }
     }
 
+    /// A helper that adds two `FheUsize` values, or returns the non-None value if one is missing.
     #[inline]
     fn add(&self, a: Option<&FheUsize>, b: Option<&FheUsize>) -> Option<FheUsize> {
         match (a, b) {
@@ -120,6 +121,7 @@ impl ServerKey {
         }
     }
 
+    /// A helper that does "and" operation on two `FheBool` values, or returns the non-None value if one is missing.
     #[inline]
     fn and_true(&self, a: Option<&FheBool>, b: Option<&FheBool>) -> Option<FheBool> {
         match (a, b) {
@@ -130,6 +132,15 @@ impl ServerKey {
         }
     }
 
+    /// A helper to find the correct character based on the shifted index.
+    /// If the character isn't to be included, it'd return an empty character / encrypted 0.
+    /// `i` is the intended index of the character
+    /// `fst` is the original encrypted string
+    /// `shifted_indices` is a list of tuples of (condition, index)
+    ///     where the condition is true if the shifted character should not be included
+    ///     (i.e. it should be replaced by the pattern's character)
+    ///     and index is the correct index of the character
+    /// This function assumes the lengths of `fst` and `shifted_indices` are the same.
     #[inline]
     fn find_shifted_index_char(
         &self,
@@ -271,8 +282,10 @@ impl ServerKey {
             .unwrap_or_else(|| self.false_ct())
     }
 
+    /// A helper that checks if fst ends with the pattern `pat`.
+    /// (as `fst` is padded, this returns an iterator over the possible start indices)
     #[inline]
-    fn find_clear_pattern_suffixes<'a>(
+    fn find_clear_pattern_padded_suffixes<'a>(
         &'a self,
         fst: &'a [FheAsciiChar],
         pat: &'a str,
@@ -290,9 +303,18 @@ impl ServerKey {
         })
     }
 
+    /// A helper that will accumulate the pattern matches:
+    /// input: iterator of tuples: (1 or 0 if provided, 0 or pattern_len)
+    /// for example for the pattern "aa" and the string "aaaab":
+    /// [(1, 2), (1, 2), (1, 2), (1, 2), (0, 0)]
+    /// this helper will then transform it into accumulated amounts with non-overlapping patterns:
+    /// [(1, 2), (1, 1), (2, 2), (2, 1), (2, 0)]
+    /// the first component is used to count the number of matches,
+    /// the second is used to check if it's inside a pattern (pattern len for the beginning of the pattern, 1 for the end;
+    /// and anything above 1 for the pattern)
     #[inline]
     fn accumulate_clear_pat_starts<
-        M: ParallelIterator<Item = Option<(Option<FheBool>, FheBool)>>,
+        M: ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>>,
     >(
         &self,
         pattern_starts: M,
@@ -316,6 +338,8 @@ impl ServerKey {
         )
     }
 
+    /// A helper to turn unpadded encrypted string to a padded one
+    /// for a compatibility with existing methods (as not all have unpadded versions yet)
     #[inline]
     fn pad_string(&self, unpadded: &FheString<Unpadded>) -> FheString<Padded> {
         let str_ref = unpadded.as_ref();

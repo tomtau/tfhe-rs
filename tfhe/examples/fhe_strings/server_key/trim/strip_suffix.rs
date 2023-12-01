@@ -73,7 +73,7 @@ impl ServerKey {
                     return (self.false_ct(), encrypted_str.clone());
                 }
                 let suffix_found = self
-                    .find_clear_pattern_suffixes(fst, pat)
+                    .find_clear_pattern_padded_suffixes(fst, pat)
                     .chain(rayon::iter::repeatn(None, pat.len()));
                 let clear_mask: Vec<_> =
                     scan(suffix_found, |x, y| self.or(x.as_ref(), y.as_ref()), None).collect();

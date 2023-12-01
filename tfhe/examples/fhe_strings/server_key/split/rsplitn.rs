@@ -64,6 +64,8 @@ impl ServerKey {
         FheSplitResult::RSplitN(zero_count, pat_len, pattern_splits)
     }
 
+    /// A helper that returns the split pattern length and the split sequence
+    /// for rsplitn and rsplit_once methods.
     #[inline]
     pub(super) fn rsplitn_inner<'a, N: Into<Number>, P: Into<Pattern<'a, Padded>>>(
         &self,
