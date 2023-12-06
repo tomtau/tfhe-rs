@@ -16,10 +16,12 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tfhe::integer::ServerKey as IntegerServerKey;
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Padded, Unpadded};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize};
 use crate::client_key::{ClientKey, PRECISION_BITS};
 use crate::scan::scan;
 
+/// A wrapper around `tfhe::integer::ServerKey` that includes
+/// all FHE string operations as methods.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ServerKey(IntegerServerKey, usize);
 
@@ -121,7 +123,8 @@ impl ServerKey {
         }
     }
 
-    /// A helper that does "and" operation on two `FheBool` values, or returns the non-None value if one is missing.
+    /// A helper that does "and" operation on two `FheBool` values, or returns the non-None value if
+    /// one is missing.
     #[inline]
     fn and_true(&self, a: Option<&FheBool>, b: Option<&FheBool>) -> Option<FheBool> {
         match (a, b) {
@@ -310,8 +313,8 @@ impl ServerKey {
     /// this helper will then transform it into accumulated amounts with non-overlapping patterns:
     /// [(1, 2), (1, 1), (2, 2), (2, 1), (2, 0)]
     /// the first component is used to count the number of matches,
-    /// the second is used to check if it's inside a pattern (pattern len for the beginning of the pattern, 1 for the end;
-    /// and anything above 1 for the pattern)
+    /// the second is used to check if it's inside a pattern (pattern len for the beginning of the
+    /// pattern, 1 for the end; and anything above 1 for the pattern)
     #[inline]
     fn accumulate_clear_pat_starts<
         M: ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>>,
@@ -341,10 +344,15 @@ impl ServerKey {
     /// A helper to turn unpadded encrypted string to a padded one
     /// for a compatibility with existing methods (as not all have unpadded versions yet)
     #[inline]
-    fn pad_string(&self, unpadded: &FheString<Unpadded>) -> FheString<Padded> {
-        let str_ref = unpadded.as_ref();
-        let mut result = str_ref.to_vec();
-        result.push(self.false_ct().into());
-        FheString::new_unchecked(result)
+    fn pad_string(&self, unpadded: &FheString) -> FheString {
+        match unpadded {
+            FheString::Unpadded(_) => {
+                let str_ref = unpadded.as_ref();
+                let mut result = str_ref.to_vec();
+                result.push(self.false_ct().into());
+                FheString::new_unchecked_padded(result)
+            }
+            FheString::Padded(_) => unpadded.clone(),
+        }
     }
 }

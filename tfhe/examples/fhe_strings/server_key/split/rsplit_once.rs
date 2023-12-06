@@ -1,4 +1,4 @@
-use crate::ciphertext::{FheString, Padded, Pattern};
+use crate::ciphertext::{FheString, Pattern};
 use crate::server_key::ServerKey;
 
 use super::FheSplitResult;
@@ -38,9 +38,9 @@ impl ServerKey {
     /// );
     /// ```
     #[inline]
-    pub fn rsplit_once<'a, P: Into<Pattern<'a, Padded>>>(
+    pub fn rsplit_once<'a, P: Into<Pattern<'a>>>(
         &self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         delimiter: P,
     ) -> FheSplitResult {
         let (_, pat_len, pattern_splits) = self.rsplitn_inner(encrypted_str, 2, delimiter);

@@ -1,4 +1,4 @@
-use crate::ciphertext::{FheString, Padded, Pattern};
+use crate::ciphertext::{FheString, Pattern};
 use crate::server_key::ServerKey;
 
 use super::FheSplitResult;
@@ -44,9 +44,9 @@ impl ServerKey {
     /// );
     /// ```
     #[inline]
-    pub fn split_terminator<'a, P: Into<Pattern<'a, Padded>>>(
+    pub fn split_terminator<'a, P: Into<Pattern<'a>>>(
         &'a self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         pat: P,
     ) -> FheSplitResult {
         let (pat_len, pattern_splits) = self.split_inner(encrypted_str, pat);

@@ -3,7 +3,7 @@ mod strip_suffix;
 mod trim_end;
 mod trim_start;
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheString, Padded};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString};
 use dashmap::DashMap;
 
 use super::ServerKey;
@@ -28,7 +28,7 @@ impl ServerKey {
     #[inline]
     #[must_use = "this returns the trimmed string as a new FheString, \
                   without modifying the original"]
-    pub fn trim(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
+    pub fn trim(&self, encrypted_str: &FheString) -> FheString {
         // TODO: do something better than this
         self.trim_start(&self.trim_end(encrypted_str))
     }

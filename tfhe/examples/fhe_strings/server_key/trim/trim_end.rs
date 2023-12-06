@@ -4,7 +4,7 @@ use rayon::iter::{
 };
 use rayon::slice::ParallelSlice;
 
-use crate::ciphertext::{FheBool, FheString, Padded};
+use crate::ciphertext::{FheBool, FheString};
 use crate::scan::scan;
 use crate::server_key::ServerKey;
 
@@ -31,8 +31,10 @@ impl ServerKey {
     #[inline]
     #[must_use = "this returns the trimmed string as a new FheString, \
                       without modifying the original"]
-    pub fn trim_end(&self, encrypted_str: &FheString<Padded>) -> FheString<Padded> {
-        let fst = encrypted_str.as_ref();
+    pub fn trim_end(&self, encrypted_str: &FheString) -> FheString {
+        // TODO: we can probably do a bit better for the unpadded version by not checking 0s
+        let enc_str = self.pad_string(encrypted_str);
+        let fst = enc_str.as_ref();
         if fst.len() < 2 {
             return encrypted_str.clone();
         }
@@ -87,7 +89,7 @@ impl ServerKey {
                 .rev(),
         );
         result.push(fst.last().cloned().expect("last element"));
-        FheString::new_unchecked(result)
+        FheString::new_unchecked_padded(result)
     }
 }
 

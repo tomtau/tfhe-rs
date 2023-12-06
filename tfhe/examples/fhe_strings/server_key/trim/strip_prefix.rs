@@ -3,7 +3,7 @@ use rayon::iter::{
     ParallelIterator,
 };
 
-use crate::ciphertext::{FheOption, FheString, Padded, Pattern, Unpadded};
+use crate::ciphertext::{FheOption, FheString, Pattern};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -56,16 +56,16 @@ impl ServerKey {
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[must_use = "this returns the remaining substring as a new FheString, \
                   without modifying the original"]
-    pub fn strip_prefix<'a, P: Into<Pattern<'a, Padded>>>(
+    pub fn strip_prefix<'a, P: Into<Pattern<'a>>>(
         &self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         prefix: P,
-    ) -> FheOption<FheString<Padded>> {
+    ) -> FheOption<FheString> {
         let enc_ref = encrypted_str.as_ref();
         let str_l = enc_ref.len();
 
-        match prefix.into() {
-            Pattern::Clear(pat) => {
+        match (encrypted_str, prefix.into()) {
+            (FheString::Padded(_), Pattern::Clear(pat)) => {
                 let starts_with = self.starts_with_clear_par(enc_ref, pat);
                 let pat_l = pat.len();
                 if str_l < pat_l || pat.is_empty() {
@@ -88,10 +88,10 @@ impl ServerKey {
                         }
                         .into()
                     }));
-                    (starts_with, FheString::new_unchecked(result))
+                    (starts_with, FheString::new_unchecked_padded(result))
                 }
             }
-            Pattern::Encrypted(pat) => {
+            (FheString::Padded(_), Pattern::Encrypted(pat @ FheString::Padded(_))) => {
                 let pat_ref = pat.as_ref();
                 let pat_l = pat_ref.len();
 
@@ -152,26 +152,21 @@ impl ServerKey {
                     }));
                     result.push(enc_ref.last().cloned().expect("last element"));
 
-                    (starts_with, FheString::new_unchecked(result))
+                    (starts_with, FheString::new_unchecked_padded(result))
                 }
             }
-        }
-    }
-
-    pub fn strip_prefix_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        prefix: P,
-    ) -> FheOption<FheString<Padded>> {
-        let enc_ref = encrypted_str.as_ref();
-        let str_l = enc_ref.len();
-
-        match prefix.into() {
-            Pattern::Clear(pat) => {
+            (FheString::Unpadded(_), Pattern::Clear(pat)) => {
                 let starts_with = self.starts_with_clear_par(enc_ref, pat);
                 let pat_l = pat.len();
                 if str_l < pat_l || pat.is_empty() {
-                    (starts_with, self.pad_string(encrypted_str))
+                    (
+                        if str_l < pat_l {
+                            self.false_ct()
+                        } else {
+                            self.true_ct()
+                        },
+                        encrypted_str.clone(),
+                    )
                 } else {
                     let zero = self.false_ct();
                     let mut result = Vec::with_capacity(str_l);
@@ -189,16 +184,23 @@ impl ServerKey {
                         .into()
                     }));
                     result.push(zero.into());
-                    (starts_with, FheString::new_unchecked(result))
+                    (starts_with, FheString::new_unchecked_padded(result))
                 }
             }
-            Pattern::Encrypted(pat) => {
+            (FheString::Unpadded(_), Pattern::Encrypted(pat @ FheString::Unpadded(_))) => {
                 let pat_l = pat.as_ref().len();
 
-                let starts_with = self.starts_with_unpadded(encrypted_str, Pattern::Encrypted(pat));
+                let starts_with = self.starts_with(encrypted_str, pat);
 
                 if str_l < pat_l || pat_l == 0 {
-                    (starts_with, self.pad_string(encrypted_str))
+                    (
+                        if str_l < pat_l {
+                            self.false_ct()
+                        } else {
+                            self.true_ct()
+                        },
+                        encrypted_str.clone(),
+                    )
                 } else {
                     let zero = self.false_ct();
                     let mut result = Vec::with_capacity(str_l);
@@ -216,8 +218,14 @@ impl ServerKey {
                         .into()
                     }));
                     result.push(zero.into());
-                    (starts_with, FheString::new_unchecked(result))
+                    (starts_with, FheString::new_unchecked_padded(result))
                 }
+            }
+            // TODO: more effiecient versions for combinations of padded and unpadded
+            (x, Pattern::Encrypted(y)) => {
+                let px = self.pad_string(x);
+                let py = self.pad_string(y);
+                self.strip_prefix(&px, &py)
             }
         }
     }
@@ -264,20 +272,18 @@ mod test {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
         assert_eq!(
             input.strip_prefix(pattern),
             client_key
-                .decrypt_option_str(&server_key.strip_prefix_unpadded(&encrypted_str, pattern))
+                .decrypt_option_str(&server_key.strip_prefix(&encrypted_str, pattern))
                 .as_deref()
         );
-        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        let encrypted_pattern = client_key.encrypt_str(pattern).unwrap();
         assert_eq!(
             input.strip_prefix(pattern),
             client_key
-                .decrypt_option_str(
-                    &server_key.strip_prefix_unpadded(&encrypted_str, &encrypted_pattern,)
-                )
+                .decrypt_option_str(&server_key.strip_prefix(&encrypted_str, &encrypted_pattern,))
                 .as_deref()
         );
     }

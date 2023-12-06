@@ -24,6 +24,15 @@ fn main() -> io::Result<()> {
                 .action(ArgAction::Set),
         )
         .arg(
+            Arg::new("input_string_padding")
+                .short('I')
+                .long("input-string-padding")
+                .required(false)
+                .value_parser(clap::value_parser!(usize))
+                .help("The input string padding (if any)")
+                .action(ArgAction::Set),
+        )
+        .arg(
             Arg::new("pattern")
                 .short('p')
                 .long("pattern")
@@ -32,11 +41,29 @@ fn main() -> io::Result<()> {
                 .action(ArgAction::Set),
         )
         .arg(
+            Arg::new("pattern_padding")
+                .short('P')
+                .long("pattern-padding")
+                .required(false)
+                .value_parser(clap::value_parser!(usize))
+                .help("The string pattern padding (if any)")
+                .action(ArgAction::Set),
+        )
+        .arg(
             Arg::new("input_string2")
                 .short('s')
                 .long("input-string2")
                 .required(false)
                 .help("The second string to use in some string operations")
+                .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("input_string2_padding")
+                .short('S')
+                .long("input-string2_padding")
+                .required(false)
+                .value_parser(clap::value_parser!(usize))
+                .help("The second string padding (if any)")
                 .action(ArgAction::Set),
         )
         .arg(
@@ -54,7 +81,7 @@ fn main() -> io::Result<()> {
                 .long("skip-encrypted-number")
                 .required(false)
                 .value_parser(clap::value_parser!(bool))
-                .help("Skip the operations with the encrypted number (to save time)")
+                .help("Skip the repeat operation with the encrypted number (to save time)")
                 .action(ArgAction::Set),
         );
     let matches = command.get_matches();
@@ -62,18 +89,27 @@ fn main() -> io::Result<()> {
         matches.get_one::<String>("input_string"),
         matches.get_one::<String>("pattern"),
     ) {
+        let input_string_pading = matches
+            .get_one::<usize>("input_string_padding")
+            .map(|s| s.to_owned());
+        let pattern_padding = matches
+            .get_one::<usize>("pattern_padding")
+            .map(|s| s.to_owned());
         let input_string2 = matches
             .get_one::<String>("input_string2")
             .map(|s| s.to_owned())
             .unwrap_or_default();
+        let input_string2_padding = matches
+            .get_one::<usize>("input_string2_padding")
+            .map(|s| s.to_owned());
         let n = matches.get_one::<usize>("number").copied().unwrap_or(2);
         let skip_n = matches
             .get_one::<bool>("skip_encrypted_number")
             .copied()
             .unwrap_or(true);
-        info!("input_string: {input_string}");
-        info!("pattern  (or the second string for comparisons): {pattern}");
-        info!("input_string2: {input_string2}");
+        info!("input_string: {input_string} (padding: {input_string_pading:?})");
+        info!("pattern  (or the second string for comparisons): {pattern} (padding: {pattern_padding:?})");
+        info!("input_string2: {input_string2} (padding: {input_string2_padding:?})");
         info!("number: {n}");
         info!("skip_encrypted_number: {skip_n}");
 
@@ -81,20 +117,48 @@ fn main() -> io::Result<()> {
         let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let server_key = server_key::ServerKey::from(&client_key);
 
-        let encrypted_str = client_key.encrypt_str(input_string).map_err(|e| {
-            error!("Failed to encrypt input string: {e}");
-            Error::new(io::ErrorKind::Other, e)
-        })?;
-        let encrypted_pattern = client_key.encrypt_str(pattern).map_err(|e| {
-            error!("Failed to encrypt input pattern: {e}");
-            Error::new(io::ErrorKind::Other, e)
-        })?;
-        let encrypted_str2 = client_key
-            .encrypt_str_padded(&input_string2, 2)
-            .map_err(|e| {
-                error!("Failed to encrypt input string2: {e}");
+        let encrypted_str = if let Some(input_string_padding) = input_string_pading {
+            client_key
+                .encrypt_str_padded(input_string.as_str(), input_string_padding)
+                .map_err(|e| {
+                    error!("Failed to encrypt input string: {e}");
+                    Error::new(io::ErrorKind::Other, e)
+                })?
+        } else {
+            client_key.encrypt_str(input_string.as_str()).map_err(|e| {
+                error!("Failed to encrypt input string: {e}");
                 Error::new(io::ErrorKind::Other, e)
-            })?;
+            })?
+        };
+        let encrypted_pattern = if let Some(pattern_padding) = pattern_padding {
+            client_key
+                .encrypt_str_padded(pattern.as_str(), pattern_padding)
+                .map_err(|e| {
+                    error!("Failed to encrypt input pattern: {e}");
+                    Error::new(io::ErrorKind::Other, e)
+                })?
+        } else {
+            client_key.encrypt_str(pattern.as_str()).map_err(|e| {
+                error!("Failed to encrypt input pattern: {e}");
+                Error::new(io::ErrorKind::Other, e)
+            })?
+        };
+        let encrypted_str2 = if let Some(input_string2_padding) = input_string2_padding {
+            client_key
+                .encrypt_str_padded(input_string2.as_str(), input_string2_padding)
+                .map_err(|e| {
+                    error!("Failed to encrypt input string2: {e}");
+                    Error::new(io::ErrorKind::Other, e)
+                })?
+        } else {
+            client_key
+                .encrypt_str(input_string2.as_str())
+                .map_err(|e| {
+                    error!("Failed to encrypt input string2: {e}");
+                    Error::new(io::ErrorKind::Other, e)
+                })?
+        };
+
         let encrypted_n = client_key.encrypt_usize(n);
 
         let now = Instant::now();

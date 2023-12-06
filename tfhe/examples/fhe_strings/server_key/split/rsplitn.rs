@@ -1,6 +1,6 @@
 use rayon::iter::{ParallelExtend, ParallelIterator};
 
-use crate::ciphertext::{FheBool, FheString, FheUsize, Number, Padded, Pattern};
+use crate::ciphertext::{FheBool, FheString, FheUsize, Number, Pattern};
 use crate::server_key::ServerKey;
 
 use super::{FhePatternLen, FheSplitResult, SplitFoundPattern};
@@ -54,9 +54,9 @@ impl ServerKey {
     /// );
     /// ```
     #[inline]
-    pub fn rsplitn<'a, N: Into<Number>, P: Into<Pattern<'a, Padded>>>(
+    pub fn rsplitn<'a, N: Into<Number>, P: Into<Pattern<'a>>>(
         &self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         n: N,
         pat: P,
     ) -> FheSplitResult {
@@ -67,79 +67,97 @@ impl ServerKey {
     /// A helper that returns the split pattern length and the split sequence
     /// for rsplitn and rsplit_once methods.
     #[inline]
-    pub(super) fn rsplitn_inner<'a, N: Into<Number>, P: Into<Pattern<'a, Padded>>>(
+    pub(super) fn rsplitn_inner<'a, N: Into<Number>, P: Into<Pattern<'a>>>(
         &self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         n: N,
         pat: P,
     ) -> (Option<FheBool>, FhePatternLen, SplitFoundPattern) {
-        let str_ref = encrypted_str.as_ref();
-        let str_len = str_ref.len();
-        match (pat.into(), n.into()) {
-            (_, Number::Clear(0)) => (
-                Some(self.true_ct()),
-                FhePatternLen::Plain(0),
-                Default::default(),
-            ),
-            (Pattern::Clear(p), Number::Clear(_)) if p.len() > str_ref.len() => (
-                None,
-                FhePatternLen::Plain(p.len()),
-                self.larger_clear_pattern_split(str_ref),
-            ),
-            (Pattern::Clear(p), n) if p.is_empty() => {
-                // TODO: more efficient way
-                let empty_pat = FheString::new_unchecked(vec![self.false_ct().into()]);
-                self.rsplitn_inner(encrypted_str, n, Pattern::Encrypted(&empty_pat))
-            }
-            (Pattern::Clear(pat), max_count) => {
-                let zero_count = match &max_count {
-                    Number::Encrypted(mc) => Some(self.0.scalar_eq_parallelized(mc, 0_u64)),
-                    _ => None,
-                };
-                let mut rev_str_ref = str_ref.to_vec();
-                rev_str_ref.reverse();
-                let pat_rev: String = pat.chars().rev().collect();
-                let zero = self.false_ct();
-                let mut split_sequence = SplitFoundPattern::new();
-                let mut accumulated_starts = self
-                    .clear_accumulated_starts(str_len, &rev_str_ref, &pat_rev, Some(&max_count))
-                    .filter_map(|x| {
-                        x.map(|(count, starts_y)| {
-                            let (starts, (in_pattern, le_maxcount)) = rayon::join(
-                                || self.0.scalar_eq_parallelized(&starts_y, 1),
-                                || self.check_in_pattern_max_count(&max_count, count, &starts_y),
-                            );
-                            self.check_le_max_count(starts, in_pattern, le_maxcount)
+        if matches!(encrypted_str, FheString::Padded(_)) {
+            let str_ref = encrypted_str.as_ref();
+            let str_len = str_ref.len();
+            match (pat.into(), n.into()) {
+                (_, Number::Clear(0)) => (
+                    Some(self.true_ct()),
+                    FhePatternLen::Plain(0),
+                    Default::default(),
+                ),
+                (Pattern::Clear(p), Number::Clear(_)) if p.len() > str_ref.len() => (
+                    None,
+                    FhePatternLen::Plain(p.len()),
+                    self.larger_clear_pattern_split(str_ref),
+                ),
+                (Pattern::Clear(p), n) if p.is_empty() => {
+                    // TODO: more efficient way
+                    let empty_pat = FheString::new_unchecked_padded(vec![self.false_ct().into()]);
+                    self.rsplitn_inner(encrypted_str, n, Pattern::Encrypted(&empty_pat))
+                }
+                (Pattern::Clear(pat), max_count) => {
+                    let zero_count = match &max_count {
+                        Number::Encrypted(mc) => Some(self.0.scalar_eq_parallelized(mc, 0_u64)),
+                        _ => None,
+                    };
+                    let mut rev_str_ref = str_ref.to_vec();
+                    rev_str_ref.reverse();
+                    let pat_rev: String = pat.chars().rev().collect();
+                    let zero = self.false_ct();
+                    let mut split_sequence = SplitFoundPattern::new();
+                    let mut accumulated_starts = self
+                        .clear_accumulated_starts(str_len, &rev_str_ref, &pat_rev, Some(&max_count))
+                        .filter_map(|x| {
+                            x.map(|(count, starts_y)| {
+                                let (starts, (in_pattern, le_maxcount)) = rayon::join(
+                                    || self.0.scalar_eq_parallelized(&starts_y, 1),
+                                    || {
+                                        self.check_in_pattern_max_count(
+                                            &max_count, count, &starts_y,
+                                        )
+                                    },
+                                );
+                                self.check_le_max_count(starts, in_pattern, le_maxcount)
+                            })
                         })
-                    })
-                    .collect::<Vec<_>>();
-                accumulated_starts.reverse();
-                split_sequence.par_extend(self.split_compute(accumulated_starts, str_ref, &zero));
-                (zero_count, FhePatternLen::Plain(pat.len()), split_sequence)
+                        .collect::<Vec<_>>();
+                    accumulated_starts.reverse();
+                    split_sequence.par_extend(self.split_compute(
+                        accumulated_starts,
+                        str_ref,
+                        &zero,
+                    ));
+                    (zero_count, FhePatternLen::Plain(pat.len()), split_sequence)
+                }
+                (Pattern::Encrypted(p), count) => {
+                    let pat = self.pad_string(p); // TODO: unpadded version
+
+                    let zero_count = match &count {
+                        Number::Encrypted(mc) => Some(self.0.scalar_eq_parallelized(mc, 0_u64)),
+                        _ => None,
+                    };
+                    let (orig_len, split_sequence) =
+                        self.encrypted_rsplit(str_len, str_ref, &pat, Some(count));
+                    (
+                        zero_count,
+                        FhePatternLen::Encrypted(orig_len),
+                        split_sequence,
+                    )
+                }
             }
-            (Pattern::Encrypted(pat), count) => {
-                let zero_count = match &count {
-                    Number::Encrypted(mc) => Some(self.0.scalar_eq_parallelized(mc, 0_u64)),
-                    _ => None,
-                };
-                let (orig_len, split_sequence) =
-                    self.encrypted_rsplit(str_len, str_ref, pat, Some(count));
-                (
-                    zero_count,
-                    FhePatternLen::Encrypted(orig_len),
-                    split_sequence,
-                )
-            }
+        } else {
+            // TODO: unpadded version
+            let padded = self.pad_string(encrypted_str);
+            self.rsplitn_inner(&padded, n, pat)
         }
     }
 
+    /// A helper that if there's a less-than-max-count (`le_maxcount`),
+    /// it'll bitand starts and in_pattern with it, otherwise just returns them.
     #[inline]
     pub(super) fn check_le_max_count(
         &self,
-        starts: FheUsize,
-        in_pattern: FheUsize,
-        le_maxcount: Option<FheUsize>,
-    ) -> (FheUsize, FheUsize) {
+        starts: FheBool,
+        in_pattern: FheBool,
+        le_maxcount: Option<FheBool>,
+    ) -> (FheBool, FheBool) {
         if let Some(mc) = le_maxcount {
             rayon::join(
                 || self.0.bitand_parallelized(&starts, &mc),
@@ -150,13 +168,15 @@ impl ServerKey {
         }
     }
 
+    /// A helper that returns if the it's in the pattern (i.e. `starts_y` is greater than 0)
+    /// and returns an optional check if the count is less than the max count.
     #[inline]
     pub(super) fn check_in_pattern_max_count(
         &self,
         max_count: &Number,
         count: Option<FheUsize>,
         starts_y: &FheUsize,
-    ) -> (FheUsize, Option<FheUsize>) {
+    ) -> (FheBool, Option<FheBool>) {
         (
             self.0.scalar_gt_parallelized(starts_y, 0u64),
             match (&max_count, count.as_ref()) {

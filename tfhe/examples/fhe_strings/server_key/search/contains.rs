@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSlice;
 
-use crate::ciphertext::{FheBool, FheString, Padded, Pattern, Unpadded};
+use crate::ciphertext::{FheBool, FheString, Pattern};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -32,13 +32,9 @@ impl ServerKey {
     /// API not fully fleshed out and ready to be stabilized
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[inline]
-    pub fn contains<'a, P: Into<Pattern<'a, Padded>>>(
-        &self,
-        encrypted_str: &FheString<Padded>,
-        pat: P,
-    ) -> FheBool {
-        match pat.into() {
-            Pattern::Clear(pat) => {
+    pub fn contains<'a, P: Into<Pattern<'a>>>(&self, encrypted_str: &FheString, pat: P) -> FheBool {
+        match (encrypted_str, pat.into()) {
+            (FheString::Padded(_), Pattern::Clear(pat)) => {
                 if pat.is_empty() {
                     return self.true_ct();
                 }
@@ -52,7 +48,7 @@ impl ServerKey {
                     .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
                     .unwrap_or_else(|| self.false_ct())
             }
-            Pattern::Encrypted(pat) => {
+            (FheString::Padded(_), Pattern::Encrypted(pat @ FheString::Padded(_))) => {
                 let snd = pat.as_ref();
                 if snd.len() < 2 {
                     return self.true_ct();
@@ -66,17 +62,7 @@ impl ServerKey {
                         |x, y| self.0.bitor_parallelized(&x, &y),
                     )
             }
-        }
-    }
-
-    #[inline]
-    pub fn contains_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        pat: P,
-    ) -> FheBool {
-        match pat.into() {
-            Pattern::Clear(pat) => {
+            (FheString::Unpadded(_), Pattern::Clear(pat)) => {
                 if pat.is_empty() {
                     return self.true_ct();
                 }
@@ -94,7 +80,7 @@ impl ServerKey {
                     .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
                     .unwrap_or_else(|| self.false_ct())
             }
-            Pattern::Encrypted(pat) => {
+            (FheString::Unpadded(_), Pattern::Encrypted(pat @ FheString::Unpadded(_))) => {
                 let snd = pat.as_ref();
                 if snd.is_empty() {
                     return self.true_ct();
@@ -108,6 +94,12 @@ impl ServerKey {
                     .map(|window| Some(self.par_eq(window, snd)))
                     .reduce(|| None, |x, y| self.or(x.as_ref(), y.as_ref()))
                     .unwrap_or_else(|| self.false_ct())
+            }
+            // TODO: more effiecient versions for combinations of padded and unpadded
+            (x, Pattern::Encrypted(y)) => {
+                let px = self.pad_string(x);
+                let py = self.pad_string(y);
+                self.contains(&px, &py)
             }
         }
     }
@@ -152,16 +144,15 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
-        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
+        let encrypted_pattern = client_key.encrypt_str(pattern).unwrap();
         assert_eq!(
             input.contains(pattern),
-            client_key.decrypt_bool(&server_key.contains_unpadded(&encrypted_str, pattern))
+            client_key.decrypt_bool(&server_key.contains(&encrypted_str, pattern))
         );
         assert_eq!(
             input.contains(pattern),
-            client_key
-                .decrypt_bool(&server_key.contains_unpadded(&encrypted_str, &encrypted_pattern))
+            client_key.decrypt_bool(&server_key.contains(&encrypted_str, &encrypted_pattern))
         );
     }
 }

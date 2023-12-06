@@ -1,6 +1,6 @@
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::ciphertext::{FheString, FheStringPadding};
+use crate::ciphertext::FheString;
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -32,27 +32,30 @@ impl ServerKey {
     /// ```
     #[must_use = "this returns the uppercase string as a new FheString, \
                       without modifying the original"]
-    pub fn to_uppercase<P: FheStringPadding>(&self, encrypted_str: &FheString<P>) -> FheString<P> {
-        FheString::new_unchecked(
-            encrypted_str
-                .as_ref()
-                .par_iter()
-                .map(|x| {
-                    // 'a' == 97, 'z' == 122
-                    let (is_lower, converted) = rayon::join(
-                        || self.check_scalar_range(x, 97, 122),
-                        || {
-                            self.0
-                                .scalar_sub_parallelized(x.as_ref(), ServerKey::ASCII_CASE_SHIFT)
-                        },
-                    );
-                    // (is_lower & converted) | (!is_lower & x)
-                    self.0
-                        .if_then_else_parallelized(&is_lower, &converted, x.as_ref())
-                        .into()
-                })
-                .collect(),
-        )
+    pub fn to_uppercase(&self, encrypted_str: &FheString) -> FheString {
+        let result = encrypted_str
+            .as_ref()
+            .par_iter()
+            .map(|x| {
+                // 'a' == 97, 'z' == 122
+                let (is_lower, converted) = rayon::join(
+                    || self.check_scalar_range(x, 97, 122),
+                    || {
+                        self.0
+                            .scalar_sub_parallelized(x.as_ref(), ServerKey::ASCII_CASE_SHIFT)
+                    },
+                );
+                // (is_lower & converted) | (!is_lower & x)
+                self.0
+                    .if_then_else_parallelized(&is_lower, &converted, x.as_ref())
+                    .into()
+            })
+            .collect();
+
+        match encrypted_str {
+            FheString::Padded(_) => FheString::Padded(result),
+            FheString::Unpadded(_) => FheString::Unpadded(result),
+        }
     }
 }
 
@@ -88,7 +91,7 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
         assert_eq!(
             input.to_uppercase(),
             client_key.decrypt_str(&server_key.to_uppercase(&encrypted_str))

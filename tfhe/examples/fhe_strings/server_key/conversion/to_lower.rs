@@ -1,6 +1,6 @@
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::ciphertext::{FheString, FheStringPadding};
+use crate::ciphertext::FheString;
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -32,14 +32,16 @@ impl ServerKey {
     /// ```
     #[must_use = "this returns the lowercase string as a new FheString, \
                       without modifying the original"]
-    pub fn to_lowercase<P: FheStringPadding>(&self, encrypted_str: &FheString<P>) -> FheString<P> {
-        FheString::new_unchecked(
-            encrypted_str
-                .as_ref()
-                .par_iter()
-                .map(|x| self.char_to_lower(x))
-                .collect(),
-        )
+    pub fn to_lowercase(&self, encrypted_str: &FheString) -> FheString {
+        let result = encrypted_str
+            .as_ref()
+            .par_iter()
+            .map(|x| self.char_to_lower(x))
+            .collect();
+        match encrypted_str {
+            FheString::Padded(_) => FheString::Padded(result),
+            FheString::Unpadded(_) => FheString::Unpadded(result),
+        }
     }
 }
 
@@ -75,7 +77,7 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
         assert_eq!(
             input.to_lowercase(),
             client_key.decrypt_str(&server_key.to_lowercase(&encrypted_str))

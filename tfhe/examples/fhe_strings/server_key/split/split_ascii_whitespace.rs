@@ -3,7 +3,7 @@ use rayon::iter::{
     ParallelIterator,
 };
 
-use crate::ciphertext::{FheString, Padded};
+use crate::ciphertext::FheString;
 use crate::server_key::ServerKey;
 
 use super::{FheSplitResult, SplitFoundPattern};
@@ -66,8 +66,9 @@ impl ServerKey {
     #[must_use = "this returns the split FheString as an iterator, \
                       without modifying the original"]
     #[inline]
-    pub fn split_ascii_whitespace(&self, encrypted_str: &FheString<Padded>) -> FheSplitResult {
-        let str_ref = encrypted_str.as_ref();
+    pub fn split_ascii_whitespace(&self, encrypted_str: &FheString) -> FheSplitResult {
+        let enc_str = self.pad_string(encrypted_str); // TODO: is it necessary?
+        let str_ref = enc_str.as_ref();
         let zero = self.false_ct();
         let mut split_sequence = SplitFoundPattern::new();
         let whitespaces = str_ref.par_iter().map(|x| self.is_whitespace(x));

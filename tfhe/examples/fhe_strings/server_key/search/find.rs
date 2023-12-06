@@ -1,6 +1,6 @@
 use rayon::prelude::*;
 
-use crate::ciphertext::{FheOption, FheString, FheUsize, Padded, Pattern, Unpadded};
+use crate::ciphertext::{FheOption, FheString, FheUsize, Pattern};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -44,13 +44,13 @@ impl ServerKey {
     /// API not fully fleshed out and ready to be stabilized
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[inline]
-    pub fn find<'a, P: Into<Pattern<'a, Padded>>>(
+    pub fn find<'a, P: Into<Pattern<'a>>>(
         &self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         pat: P,
     ) -> FheOption<FheUsize> {
-        match pat.into() {
-            Pattern::Clear(pat) => {
+        match (encrypted_str, pat.into()) {
+            (FheString::Padded(_), Pattern::Clear(pat)) => {
                 if pat.is_empty() {
                     return (self.true_ct(), self.false_ct());
                 }
@@ -60,7 +60,7 @@ impl ServerKey {
                 let fst = encrypted_str.as_ref();
                 self.find_clear_pat_index(fst, pat, true)
             }
-            Pattern::Encrypted(pat) => {
+            (FheString::Padded(_), Pattern::Encrypted(pat @ FheString::Padded(_))) => {
                 let snd = pat.as_ref();
                 if snd.len() < 2 {
                     return (self.true_ct(), self.false_ct());
@@ -84,17 +84,7 @@ impl ServerKey {
                         },
                     )
             }
-        }
-    }
-
-    #[inline]
-    pub fn find_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        pat: P,
-    ) -> FheOption<FheUsize> {
-        match pat.into() {
-            Pattern::Clear(pat) => {
+            (FheString::Unpadded(_), Pattern::Clear(pat)) => {
                 if pat.is_empty() {
                     return (self.true_ct(), self.false_ct());
                 }
@@ -104,7 +94,7 @@ impl ServerKey {
                 let fst = encrypted_str.as_ref();
                 self.find_clear_pat_index(fst, pat, true)
             }
-            Pattern::Encrypted(pat) => {
+            (FheString::Unpadded(_), Pattern::Encrypted(pat @ FheString::Unpadded(_))) => {
                 let snd = pat.as_ref();
                 if snd.is_empty() {
                     return (self.true_ct(), self.false_ct());
@@ -127,6 +117,12 @@ impl ServerKey {
                             )
                         },
                     )
+            }
+            // TODO: more effiecient versions for combinations of padded and unpadded
+            (x, Pattern::Encrypted(y)) => {
+                let px = self.pad_string(x);
+                let py = self.pad_string(y);
+                self.find(&px, &py)
             }
         }
     }
@@ -169,17 +165,15 @@ mod test {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
-        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
+        let encrypted_pattern = client_key.encrypt_str(pattern).unwrap();
         assert_eq!(
             input.find(pattern),
-            client_key.decrypt_option_usize(&server_key.find_unpadded(&encrypted_str, pattern))
+            client_key.decrypt_option_usize(&server_key.find(&encrypted_str, pattern))
         );
         assert_eq!(
             input.find(pattern),
-            client_key.decrypt_option_usize(
-                &server_key.find_unpadded(&encrypted_str, &encrypted_pattern)
-            )
+            client_key.decrypt_option_usize(&server_key.find(&encrypted_str, &encrypted_pattern))
         );
     }
 }

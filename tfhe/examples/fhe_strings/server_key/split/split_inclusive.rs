@@ -2,7 +2,7 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, ParallelExtend, ParallelIterator,
 };
 
-use crate::ciphertext::{FheString, Padded, Pattern};
+use crate::ciphertext::{FheString, Pattern};
 use crate::scan::scan;
 use crate::server_key::ServerKey;
 
@@ -52,12 +52,13 @@ impl ServerKey {
     /// );
     /// ```
     #[inline]
-    pub fn split_inclusive<'a, P: Into<Pattern<'a, Padded>>>(
+    pub fn split_inclusive<'a, P: Into<Pattern<'a>>>(
         &self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         pat: P,
     ) -> FheSplitResult {
-        let str_ref = encrypted_str.as_ref();
+        let enc_str = self.pad_string(encrypted_str); // TODO: unpadded version
+        let str_ref = enc_str.as_ref();
         let str_len = str_ref.len();
         match pat.into() {
             Pattern::Clear(p) if p.is_empty() => {
@@ -78,13 +79,14 @@ impl ServerKey {
                         .collect(),
                 )
             }
-            Pattern::Encrypted(pat) => {
+            Pattern::Encrypted(p) => {
+                let pat = self.pad_string(p); // TODO: unpadded version
                 let zero = self.false_ct();
-                let is_empty = self.is_empty(pat);
+                let is_empty = self.is_empty(&pat);
                 let mut split_sequence = SplitFoundPattern::new();
                 split_sequence.push_back((is_empty.clone(), zero.into()));
                 let pat_ref = pat.as_ref();
-                let pat_len = self.0.max_parallelized(&self.len(pat), &is_empty);
+                let pat_len = self.0.max_parallelized(&self.len(&pat), &is_empty);
                 let pattern_starts = (0..str_len).into_par_iter().map(|i| {
                     let starts = self.starts_with_encrypted_par(&str_ref[i..], pat_ref);
                     Some(self.0.mul_parallelized(&starts, &pat_len))

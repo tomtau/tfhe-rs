@@ -1,6 +1,6 @@
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::ciphertext::{FheString, FheUsize, Padded, Unpadded};
+use crate::ciphertext::{FheString, FheUsize};
 
 use super::ServerKey;
 
@@ -23,20 +23,20 @@ impl ServerKey {
     /// ```
     #[must_use]
     #[inline]
-    pub fn len(&self, encrypted_str: &FheString<Padded>) -> FheUsize {
-        let fst = encrypted_str.as_ref();
-        fst[..fst.len() - 1]
-            .par_iter()
-            .map(|x| Some(self.0.scalar_ne_parallelized(x.as_ref(), 0)))
-            .reduce(|| None, |a, b| self.add(a.as_ref(), b.as_ref()))
-            .unwrap_or_else(|| self.false_ct())
-    }
-
-    #[must_use]
-    #[inline]
-    pub fn len_unpadded(&self, encrypted_str: &FheString<Unpadded>) -> FheUsize {
-        self.0
-            .create_trivial_radix(encrypted_str.as_ref().len() as u64, self.1)
+    pub fn len(&self, encrypted_str: &FheString) -> FheUsize {
+        match encrypted_str {
+            FheString::Padded(_) => {
+                let fst = encrypted_str.as_ref();
+                fst[..fst.len() - 1]
+                    .par_iter()
+                    .map(|x| Some(self.0.scalar_ne_parallelized(x.as_ref(), 0)))
+                    .reduce(|| None, |a, b| self.add(a.as_ref(), b.as_ref()))
+                    .unwrap_or_else(|| self.false_ct())
+            }
+            FheString::Unpadded(_) => self
+                .0
+                .create_trivial_radix(encrypted_str.as_ref().len() as u64, self.1),
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::ciphertext::{FheBool, FheString, Padded, Unpadded};
+use crate::ciphertext::{FheBool, FheString};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -34,57 +34,56 @@ impl ServerKey {
     /// ```
     #[inline]
     #[must_use]
-    pub fn ge(
-        &self,
-        encrypted_str: &FheString<Padded>,
-        other_encrypted_str: &FheString<Padded>,
-    ) -> FheBool {
-        let fst = encrypted_str.as_ref();
-        let snd = other_encrypted_str.as_ref();
-        match fst.len().cmp(&snd.len()) {
-            Ordering::Less => {
-                let (any_ne, leftmost_gt) = self.par_ge(fst, &snd[..fst.len()]);
+    pub fn ge(&self, encrypted_str: &FheString, other_encrypted_str: &FheString) -> FheBool {
+        match (encrypted_str, other_encrypted_str) {
+            (FheString::Padded(_), FheString::Padded(_)) => {
+                let fst = encrypted_str.as_ref();
+                let snd = other_encrypted_str.as_ref();
+                match fst.len().cmp(&snd.len()) {
+                    Ordering::Less => {
+                        let (any_ne, leftmost_gt) = self.par_ge(fst, &snd[..fst.len()]);
 
-                self.if_then_else(
-                    any_ne.as_ref(),
-                    false,
-                    &leftmost_gt,
-                    &self.par_eq_zero(&snd[fst.len()..]),
-                )
+                        self.if_then_else(
+                            any_ne.as_ref(),
+                            false,
+                            &leftmost_gt,
+                            &self.par_eq_zero(&snd[fst.len()..]),
+                        )
+                    }
+                    Ordering::Equal => {
+                        let (any_ne, leftmost_gt) = self.par_ge(fst, snd);
+                        self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
+                    }
+                    Ordering::Greater => {
+                        let (any_ne, leftmost_gt) = self.par_ge(&fst[..snd.len()], snd);
+                        self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
+                    }
+                }
             }
-            Ordering::Equal => {
-                let (any_ne, leftmost_gt) = self.par_ge(fst, snd);
-                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
-            }
-            Ordering::Greater => {
-                let (any_ne, leftmost_gt) = self.par_ge(&fst[..snd.len()], snd);
-                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
-            }
-        }
-    }
+            (FheString::Unpadded(_), FheString::Unpadded(_)) => {
+                let fst = encrypted_str.as_ref();
+                let snd = other_encrypted_str.as_ref();
+                match fst.len().cmp(&snd.len()) {
+                    Ordering::Less => {
+                        let (any_ne, leftmost_gt) = self.par_ge(fst, &snd[..fst.len()]);
 
-    #[inline]
-    #[must_use]
-    pub fn ge_unpadded(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        other_encrypted_str: &FheString<Unpadded>,
-    ) -> FheBool {
-        let fst = encrypted_str.as_ref();
-        let snd = other_encrypted_str.as_ref();
-        match fst.len().cmp(&snd.len()) {
-            Ordering::Less => {
-                let (any_ne, leftmost_gt) = self.par_ge(fst, &snd[..fst.len()]);
-
-                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.false_ct())
+                        self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.false_ct())
+                    }
+                    Ordering::Equal => {
+                        let (any_ne, leftmost_gt) = self.par_ge(fst, snd);
+                        self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
+                    }
+                    Ordering::Greater => {
+                        let (any_ne, leftmost_gt) = self.par_ge(&fst[..snd.len()], snd);
+                        self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
+                    }
+                }
             }
-            Ordering::Equal => {
-                let (any_ne, leftmost_gt) = self.par_ge(fst, snd);
-                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
-            }
-            Ordering::Greater => {
-                let (any_ne, leftmost_gt) = self.par_ge(&fst[..snd.len()], snd);
-                self.if_then_else(any_ne.as_ref(), false, &leftmost_gt, &self.true_ct())
+            // TODO: more effiecient versions for combinations of padded and unpadded
+            (x, y) => {
+                let px = self.pad_string(x);
+                let py = self.pad_string(y);
+                self.ge(&px, &py)
             }
         }
     }
@@ -133,19 +132,19 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let s1 = client_key.encrypt_str_unpadded(input_a).unwrap();
-        let s2 = client_key.encrypt_str_unpadded(input_b).unwrap();
+        let s1 = client_key.encrypt_str(input_a).unwrap();
+        let s2 = client_key.encrypt_str(input_b).unwrap();
         assert_eq!(
             input_a >= input_b,
-            client_key.decrypt_bool(&server_key.ge_unpadded(&s1, &s2))
+            client_key.decrypt_bool(&server_key.ge(&s1, &s2))
         );
         assert_eq!(
             input_a >= input_a,
-            client_key.decrypt_bool(&server_key.ge_unpadded(&s1, &s1))
+            client_key.decrypt_bool(&server_key.ge(&s1, &s1))
         );
         assert_eq!(
             input_b >= input_a,
-            client_key.decrypt_bool(&server_key.ge_unpadded(&s2, &s1))
+            client_key.decrypt_bool(&server_key.ge(&s2, &s1))
         );
     }
 }

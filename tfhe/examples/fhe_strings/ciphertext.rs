@@ -1,12 +1,14 @@
-use std::marker::PhantomData;
-
 use rayon::iter::{IntoParallelIterator, ParallelExtend, ParallelIterator};
 use tfhe::integer::RadixCiphertext;
 
 use crate::client_key::ClientKey;
 
+/// An alias for a FHE ciphertext representing 0 or 1
+/// (to assist the refactoring to 0.5 which has a dedicated BooleanBlock type)
 pub type FheBool = RadixCiphertext;
+/// An alias for encrypted indices or other integer values
 pub type FheUsize = RadixCiphertext;
+/// An alias for encrypted options, i.e. a FHE bool and a FHE value
 pub type FheOption<T> = (FheBool, T);
 
 /// A FHE wrapper for an ASCII character.
@@ -31,19 +33,37 @@ impl AsMut<RadixCiphertext> for FheAsciiChar {
     }
 }
 
-#[derive(Clone)]
-pub struct Unpadded;
-#[derive(Clone)]
-pub struct Padded;
-pub trait FheStringPadding {}
-impl FheStringPadding for Unpadded {}
-impl FheStringPadding for Padded {}
-
 /// A FHE wrapper for a string of ASCII characters.
+/// Currently, there are two variants for padded (the original bounty)
+/// and the unpadded version (the bounty edit).
+/// Both of these variants can be used in follow-up operations;
+/// it'd also be possible to have an additional variant that represents
+/// an encrypted string that's not properly padded (e.g. has a 0-characters in the beginning).
+/// This variant wouldn't work with follow-up operations, but would be useful for
+/// one-off operations (e.g. `strip_prefix` or `trim_start`) where it'd save some
+/// operations that are done to properly shift the encrypted string.
 #[derive(Clone)]
-pub struct FheString<P: FheStringPadding>(Vec<FheAsciiChar>, PhantomData<P>);
+pub enum FheString {
+    /// No 0 characters are present in the encrypted string.
+    Unpadded(Vec<FheAsciiChar>),
+    /// The encrypted string is padded with one or more 0 characters.
+    Padded(Vec<FheAsciiChar>),
+}
 
-impl FheString<Unpadded> {
+impl FheString {
+    /// An internal helper that creates a new unpadded encrypted
+    /// string without checking the input.
+    pub(crate) fn new_unchecked_padded(enc_s: Vec<FheAsciiChar>) -> Self {
+        Self::Padded(enc_s)
+    }
+
+    /// An internal helper that creates a new padded encrypted
+    /// string without checking the input.
+    pub(crate) fn new_unchecked_unpadded(enc_s: Vec<FheAsciiChar>) -> Self {
+        Self::Unpadded(enc_s)
+    }
+
+    /// Creates a new unpadded encrypted string from a plain string slice.
     pub fn new(
         client_key: &ClientKey,
         s: &str,
@@ -59,17 +79,10 @@ impl FheString<Unpadded> {
             .into_par_iter()
             .map(|byte| client_key.encrypt_byte(*byte))
             .collect();
-        Ok(Self(enc_s, PhantomData {}))
+        Ok(Self::Unpadded(enc_s))
     }
-}
 
-impl<P: FheStringPadding> FheString<P> {
-    pub(crate) fn new_unchecked(enc_s: Vec<FheAsciiChar>) -> Self {
-        Self(enc_s, PhantomData {})
-    }
-}
-
-impl FheString<Padded> {
+    /// Creates a new padded encrypted string from a plain string slice.
     pub fn new_with_padding(
         client_key: &ClientKey,
         s: &str,
@@ -94,41 +107,62 @@ impl FheString<Padded> {
                 .into_par_iter()
                 .map(|_| client_key.encrypt_byte(0)),
         );
-        Ok(Self(enc_s, PhantomData {}))
+        Ok(Self::Padded(enc_s))
     }
 }
 
-impl<P: FheStringPadding> AsRef<[FheAsciiChar]> for FheString<P> {
+impl AsRef<[FheAsciiChar]> for FheString {
     fn as_ref(&self) -> &[FheAsciiChar] {
-        &self.0
+        match self {
+            Self::Unpadded(enc_s) => enc_s,
+            Self::Padded(enc_s) => enc_s,
+        }
     }
 }
 
-impl<P: FheStringPadding> AsMut<[FheAsciiChar]> for FheString<P> {
+impl AsMut<[FheAsciiChar]> for FheString {
     fn as_mut(&mut self) -> &mut [FheAsciiChar] {
-        &mut self.0
+        match self {
+            Self::Unpadded(enc_s) => enc_s,
+            Self::Padded(enc_s) => enc_s,
+        }
     }
 }
 
-pub enum Pattern<'a, P: FheStringPadding> {
+/// Patterns used in string operations.
+/// Possible extensions:
+/// TODO: add a single plain `char` or `u8`
+/// TODO: add a single encrypted `FheAsciiChar`
+/// TODO: add a slice of plain `char`s or `u8`s
+/// TODO: add a slice of encrypted `FheAsciiChar`s
+/// TODO: add a closure that takes a `FheAsciiChar` and returns a `FheBool`
+/// TODO: (encrypted closure as an encrypted bytecode plus an interpreter?)
+/// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
+/// API not fully fleshed out and ready to be stabilized
+/// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
+pub enum Pattern<'a> {
     Clear(&'a str),
-    Encrypted(&'a FheString<P>),
+    Encrypted(&'a FheString),
 }
 
-impl<'a, P: FheStringPadding> From<&'a str> for Pattern<'a, P> {
+/// TODO: `TryFrom` and check it's ASCII-only?
+impl<'a> From<&'a str> for Pattern<'a> {
     fn from(s: &'a str) -> Self {
         Self::Clear(s)
     }
 }
 
-impl<'a, P: FheStringPadding> From<&'a FheString<P>> for Pattern<'a, P> {
-    fn from(s: &'a FheString<P>) -> Self {
+impl<'a> From<&'a FheString> for Pattern<'a> {
+    fn from(s: &'a FheString) -> Self {
         Self::Encrypted(s)
     }
 }
 
+/// A wrapper for a number to be used in some string operations.
 pub enum Number {
+    /// A plaintext number.
     Clear(usize),
+    /// An encrypted number.
     Encrypted(RadixCiphertext),
 }
 

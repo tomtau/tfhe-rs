@@ -1,4 +1,4 @@
-use crate::ciphertext::{FheBool, FheString, Padded, Unpadded};
+use crate::ciphertext::{FheBool, FheString};
 
 use super::ServerKey;
 
@@ -20,18 +20,18 @@ impl ServerKey {
     /// ```
     #[must_use]
     #[inline]
-    pub fn is_empty(&self, encrypted_str: &FheString<Padded>) -> FheBool {
-        self.0
-            .scalar_eq_parallelized(encrypted_str.as_ref()[0].as_ref(), 0)
-    }
-
-    #[must_use]
-    #[inline]
-    pub fn is_empty_unpadded(&self, encrypted_str: &FheString<Unpadded>) -> FheBool {
-        if encrypted_str.as_ref().is_empty() {
-            self.false_ct()
-        } else {
-            self.true_ct()
+    pub fn is_empty(&self, encrypted_str: &FheString) -> FheBool {
+        match encrypted_str {
+            FheString::Padded(_) => self
+                .0
+                .scalar_eq_parallelized(encrypted_str.as_ref()[0].as_ref(), 0),
+            FheString::Unpadded(_) => {
+                if encrypted_str.as_ref().is_empty() {
+                    self.true_ct()
+                } else {
+                    self.false_ct()
+                }
+            }
         }
     }
 }

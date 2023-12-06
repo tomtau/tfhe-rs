@@ -3,7 +3,7 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number, Padded, Unpadded};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number};
 
 use super::ServerKey;
 
@@ -47,18 +47,14 @@ impl ServerKey {
     /// let huge = server_key.repeat(&s, usize::MAX);
     /// ```
     #[must_use]
-    pub fn repeat<N: Into<Number>>(
-        &self,
-        encrypted_str: &FheString<Padded>,
-        n: N,
-    ) -> FheString<Padded> {
+    pub fn repeat<N: Into<Number>>(&self, encrypted_str: &FheString, n: N) -> FheString {
         let str_ref = encrypted_str.as_ref();
         let zero = self.false_ct();
 
-        match n.into() {
-            Number::Clear(0) => FheString::new_unchecked(vec![self.false_ct().into()]),
-            Number::Clear(1) => encrypted_str.clone(),
-            Number::Clear(rep_l) if rep_l < 8 => {
+        match (encrypted_str, n.into()) {
+            (_, Number::Clear(0)) => FheString::new_unchecked_unpadded(vec![]),
+            (_, Number::Clear(1)) => encrypted_str.clone(),
+            (FheString::Padded(_), Number::Clear(rep_l)) if rep_l < 8 => {
                 // on M2, it seems to be faster to do this for smaller `n`
                 // even though concat isn't that optimized now
                 let substrings = DashMap::new();
@@ -66,7 +62,7 @@ impl ServerKey {
                 let result = self.repeat_clear_rec(&substrings, rep_l).clone();
                 result
             }
-            Number::Clear(rep_l) => {
+            (FheString::Padded(_), Number::Clear(rep_l)) => {
                 let mut result = Vec::with_capacity(str_ref.len() * rep_l);
 
                 let str_len = self.len(encrypted_str);
@@ -83,9 +79,9 @@ impl ServerKey {
                         )
                     })
                     .collect_into_vec(&mut result);
-                FheString::new_unchecked(result)
+                FheString::new_unchecked_padded(result)
             }
-            Number::Encrypted(rep_l) => {
+            (FheString::Padded(_), Number::Encrypted(rep_l)) => {
                 // for the encrypted number, we don't know the exact length
                 // so we allocated as if we would repeat the string 256 times (at most)
                 const MAX_REP_L: usize = 256;
@@ -106,7 +102,43 @@ impl ServerKey {
                     })
                     .collect_into_vec(&mut result);
 
-                FheString::new_unchecked(result)
+                FheString::new_unchecked_padded(result)
+            }
+            (FheString::Unpadded(_), Number::Clear(rep_l)) => {
+                let str_ref = encrypted_str
+                    .as_ref()
+                    .par_iter()
+                    .map(|c| c.as_ref())
+                    .collect::<Vec<_>>();
+                FheString::new_unchecked_unpadded(
+                    str_ref
+                        .repeat(rep_l)
+                        .par_iter()
+                        .map(|c| (*c).clone().into())
+                        .collect(),
+                )
+            }
+            (FheString::Unpadded(_), Number::Encrypted(rep_l)) => {
+                const MAX_REP_L: usize = 256;
+
+                let str_ref = encrypted_str
+                    .as_ref()
+                    .par_iter()
+                    .map(|c| c.as_ref())
+                    .collect::<Vec<_>>();
+                let zero = self.false_ct();
+                let len = self.0.scalar_mul_parallelized(&rep_l, str_ref.len() as u64);
+                let mut result = str_ref
+                    .repeat(MAX_REP_L)
+                    .par_iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let cond = self.0.scalar_gt_parallelized(&len, i as u64);
+                        self.0.if_then_else_parallelized(&cond, *c, &zero).into()
+                    })
+                    .collect::<Vec<_>>();
+                result.push(self.false_ct().into());
+                FheString::new_unchecked_padded(result)
             }
         }
     }
@@ -150,9 +182,9 @@ impl ServerKey {
     /// this is a recursive helper that will fill the `substrings` map
     fn repeat_clear_rec<'a>(
         &self,
-        substrings: &'a DashMap<usize, FheString<Padded>>,
+        substrings: &'a DashMap<usize, FheString>,
         n: usize,
-    ) -> dashmap::mapref::one::Ref<'a, usize, FheString<Padded>> {
+    ) -> dashmap::mapref::one::Ref<'a, usize, FheString> {
         if let Some(s) = substrings.get(&n) {
             // if we already have the result, return it
             s
@@ -175,54 +207,6 @@ impl ServerKey {
             substrings.insert(n, concatted);
             return substrings.get(&n).expect("just inserted");
         }
-    }
-
-    #[must_use]
-    pub fn repeat_unpadded_clear(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        n: usize,
-    ) -> FheString<Unpadded> {
-        let str_ref = encrypted_str
-            .as_ref()
-            .par_iter()
-            .map(|c| c.as_ref())
-            .collect::<Vec<_>>();
-        FheString::new_unchecked(
-            str_ref
-                .repeat(n)
-                .par_iter()
-                .map(|c| (*c).clone().into())
-                .collect(),
-        )
-    }
-
-    #[must_use]
-    pub fn repeat_unpadded_encrypted(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        n: FheUsize,
-    ) -> FheString<Padded> {
-        const MAX_REP_L: usize = 256;
-
-        let str_ref = encrypted_str
-            .as_ref()
-            .par_iter()
-            .map(|c| c.as_ref())
-            .collect::<Vec<_>>();
-        let zero = self.false_ct();
-        let len = self.0.scalar_mul_parallelized(&n, str_ref.len() as u64);
-        let mut result = str_ref
-            .repeat(MAX_REP_L)
-            .par_iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let cond = self.0.scalar_gt_parallelized(&len, i as u64);
-                self.0.if_then_else_parallelized(&cond, *c, &zero).into()
-            })
-            .collect::<Vec<_>>();
-        result.push(self.false_ct().into());
-        FheString::new_unchecked(result)
     }
 }
 
@@ -267,17 +251,15 @@ mod test {
         let server_key = server_key::ServerKey::from(sk);
         let encrypted_n = client_key.encrypt_usize(n);
 
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
 
         assert_eq!(
             input.repeat(n),
-            client_key.decrypt_str(&server_key.repeat_unpadded_clear(&encrypted_str, n))
+            client_key.decrypt_str(&server_key.repeat(&encrypted_str, n))
         );
         assert_eq!(
             input.repeat(n),
-            client_key.decrypt_str(
-                &server_key.repeat_unpadded_encrypted(&encrypted_str, encrypted_n.clone())
-            )
+            client_key.decrypt_str(&server_key.repeat(&encrypted_str, encrypted_n.clone()))
         );
     }
 }

@@ -1,21 +1,288 @@
 use rayon::prelude::*;
 use tfhe::integer::RadixCiphertext;
 
-use crate::ciphertext::{
-    FheAsciiChar, FheBool, FheString, FheUsize, Number, Padded, Pattern, Unpadded,
-};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number, Pattern};
 use crate::scan::scan;
 
 use super::ServerKey;
 
 impl ServerKey {
+    /// Replaces all matches of a pattern with another string.
+    ///
+    /// `replace` creates a new [`FheString`], and copies the data from `encrypted_str` into it.
+    /// While doing so, it attempts to find matches of a pattern. If it finds any, it
+    /// replaces them with the replacement string slice.
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s = client_key.encrypt_str("this is old").unwrap();
+    /// assert_eq!(
+    ///     "this is new",
+    ///     client_key.decrypt_str(&server_key.replace(&s, "old", "new"))
+    /// );
+    /// assert_eq!(
+    ///     "than an old",
+    ///     client_key.decrypt_str(&server_key.replace(&s, "is", "an"))
+    /// );
+    /// let old = client_key.encrypt_str("old").unwrap();
+    /// let new = client_key.encrypt_str("new").unwrap();
+    /// let is = client_key.encrypt_str("is").unwrap();
+    /// let an = client_key.encrypt_str("an").unwrap();
+    /// assert_eq!(
+    ///     "this is new",
+    ///     client_key.decrypt_str(&server_key.replace(&s, &old, &new))
+    /// );
+    /// assert_eq!(
+    ///     "than an old",
+    ///     client_key.decrypt_str(&server_key.replace(&s, &is, &an))
+    /// );
+    /// ```
+    ///
+    /// When the pattern doesn't match, it returns `encrypted_str` as [`FheString`]:
+    ///
+    /// ```
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s = client_key.encrypt_str("this is old").unwrap();
+    /// assert_eq!(
+    ///     "this is old",
+    ///     client_key.decrypt_str(&server_key.replace(&s, "X", "Y"))
+    /// );
+    /// let x = client_key.encrypt_str("X").unwrap();
+    /// let y = client_key.encrypt_str("Y").unwrap();
+    /// assert_eq!(
+    ///     "this is old",
+    ///     client_key.decrypt_str(&server_key.replace(&s, &x, &y))
+    /// );
+    /// ```
+    /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
+    /// API not fully fleshed out and ready to be stabilized
+    /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
+    #[must_use = "this returns the replaced FheString as a new allocation, \
+                        without modifying the original"]
+    #[inline]
+    pub fn replace<'a, P: Into<Pattern<'a>>>(
+        &self,
+        encrypted_str: &FheString,
+        from: P,
+        to: P,
+    ) -> FheString {
+        let str_ref = encrypted_str.as_ref();
+        match (encrypted_str, from.into(), to.into()) {
+            (_, Pattern::Clear(from_pat), Pattern::Clear(to_pat))
+                if from_pat.is_empty() && to_pat.is_empty() =>
+            {
+                encrypted_str.clone()
+            }
+            (FheString::Unpadded(_), Pattern::Encrypted(from_pat), _)
+                if !from_pat.as_ref().is_empty() && str_ref.is_empty() =>
+            {
+                encrypted_str.clone()
+            }
+            (FheString::Unpadded(_), Pattern::Clear(from_pat), Pattern::Clear(to_pat))
+                if from_pat.is_empty() =>
+            {
+                self.replace_empty_from_pat_unpadded_clear(str_ref, to_pat, None)
+            }
+            (FheString::Padded(_), Pattern::Clear(from_pat), Pattern::Clear(to_pat))
+                if from_pat.is_empty() =>
+            {
+                self.replace_empty_from_pat_padded_clear(str_ref, to_pat, None)
+            }
+            (_, Pattern::Clear(from_pat), Pattern::Clear(to_pat))
+                if to_pat.len() == from_pat.len() =>
+            {
+                self.replace_same_len_pat_clear(encrypted_str, from_pat, to_pat, None)
+            }
+            (_, Pattern::Clear(from_pat), Pattern::Clear(to_pat)) => {
+                self.replace_diff_len_pat_clear(encrypted_str, from_pat, to_pat, None)
+            }
+            (FheString::Padded(_), Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat)) => {
+                self.replace_pat_encrypted(encrypted_str, from_pat, to_pat, None)
+            }
+            (FheString::Unpadded(_), Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat))
+                if from_pat.as_ref().len() == to_pat.as_ref().len() =>
+            {
+                self.replace_same_len_pat_unpadded_encrypted(str_ref, from_pat, to_pat, None)
+            }
+            // TODO: more effiecient versions for combinations of padded and unpadded
+            (FheString::Unpadded(_), Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat)) => {
+                self.replace_pat_encrypted(
+                    &self.pad_string(encrypted_str),
+                    &self.pad_string(from_pat),
+                    &self.pad_string(to_pat),
+                    None,
+                )
+            }
+            (FheString::Unpadded(_), Pattern::Clear(_), Pattern::Encrypted(_))
+            | (FheString::Unpadded(_), Pattern::Encrypted(_), Pattern::Clear(_))
+            | (FheString::Padded(_), Pattern::Clear(_), Pattern::Encrypted(_))
+            | (FheString::Padded(_), Pattern::Encrypted(_), Pattern::Clear(_)) => {
+                // since both `from` and `to` need to be `P`
+                unreachable!("mixed replacement patterns are not supported")
+            }
+        }
+    }
+
+    /// Replaces first N matches of a pattern with another string.
+    ///
+    /// `replacen` creates a new [`FheString`], and copies the data from  `encrypted_str` into it.
+    /// While doing so, it attempts to find matches of a pattern. If it finds any, it
+    /// replaces them with the replacement string slice at most `count` times.
+    ///
+    /// `count` can either be a [`Number::Clear`] or a [`Number::Encrypted`].
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```
+    /// let s = "foo foo 123 foo";
+    /// assert_eq!("new new 123 foo", s.replacen("foo", "new", 2));
+    /// assert_eq!("faa fao 123 foo", s.replacen('o', "a", 3));
+
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s = client_key.encrypt_str("foo foo 123 foo").unwrap();
+    /// assert_eq!("new new 123 foo", client_key.decrypt_str(&server_key.replacen(&s, "foo", "new",
+    /// 2))); let foo = client_key.encrypt_str("foo").unwrap();
+    /// let new = client_key.encrypt_str("new").unwrap();
+    /// let count2 = client_key.encrypt_usize(2);
+    /// assert_eq!("new new 123 foo", client_key.decrypt_str(&server_key.replacen(&s, foo, new,
+    /// count2))); assert_eq!("faa fao 123 foo", client_key.decrypt_str(&server_key.replacen(&s,
+    /// "o", "a", 3))); let o = client_key.encrypt_str("o").unwrap();
+    /// let a = client_key.encrypt_str("a").unwrap();
+    /// let count3 = client_key.encrypt_usize(3);
+    /// assert_eq!("faa fao 123 foo", client_key.decrypt_str(&server_key.replacen(&s, "o", "a",
+    /// count3))); ```
+    ///
+    /// When the pattern doesn't match, it returns this string slice as [`String`]:
+    /// ```
+    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let client_key = client_key::ClientKey::from(ck);
+    /// let server_key = server_key::ServerKey::from(sk);
+    ///
+    /// let s = client_key.encrypt_str("this is old").unwrap();
+    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replacen(&s, "cookie monster",
+    /// "little lamb", 10))); let cm = client_key.encrypt_str("cookie monster").unwrap();
+    /// let ll = client_key.encrypt_str("little lamb").unwrap();
+    /// let count10 = client_key.encrypt_usize(10);
+    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replacen(&s, &cm, &ll,
+    /// count10))); ```
+    #[must_use = "this returns the replaced `FheString` as a new allocation, \
+                      without modifying the original"]
+    pub fn replacen<'a, P: Into<Pattern<'a>>, N: Into<Number>>(
+        &'a self,
+        encrypted_str: &FheString,
+        from: P,
+        to: P,
+        count: N,
+    ) -> FheString {
+        let str_ref = encrypted_str.as_ref();
+        match (encrypted_str, from.into(), to.into(), count.into()) {
+            (_, Pattern::Clear(from_pat), Pattern::Clear(to_pat), _)
+                if (from_pat.is_empty() && to_pat.is_empty()) =>
+            {
+                encrypted_str.clone()
+            }
+            (_, _, _, Number::Clear(0)) => encrypted_str.clone(),
+            // TODO: CLear/Clear/Encrypted works via replace_diff_len_pat_clear, but may can be made
+            // more efficient?
+            (
+                FheString::Padded(_),
+                Pattern::Clear(from_pat),
+                Pattern::Clear(to_pat),
+                Number::Clear(count),
+            ) if from_pat.is_empty() => {
+                self.replace_empty_from_pat_padded_clear(str_ref, to_pat, Some(count))
+            }
+            (FheString::Padded(_), Pattern::Clear(from_pat), Pattern::Clear(to_pat), n)
+                if to_pat.len() == from_pat.len() =>
+            {
+                self.replace_same_len_pat_clear(encrypted_str, from_pat, to_pat, Some(n))
+            }
+            (FheString::Padded(_), Pattern::Clear(from_pat), Pattern::Clear(to_pat), n) => {
+                self.replace_diff_len_pat_clear(encrypted_str, from_pat, to_pat, Some(n))
+            }
+            (FheString::Padded(_), Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat), n) => {
+                self.replace_pat_encrypted(encrypted_str, from_pat, to_pat, Some(n))
+            }
+            (FheString::Unpadded(_), Pattern::Clear(from_pat), _, _)
+                if !from_pat.is_empty() && str_ref.is_empty() =>
+            {
+                encrypted_str.clone()
+            }
+            (FheString::Unpadded(_), Pattern::Encrypted(from_pat), _, _)
+                if !from_pat.as_ref().is_empty() && str_ref.is_empty() =>
+            {
+                encrypted_str.clone()
+            }
+            (
+                FheString::Unpadded(_),
+                Pattern::Clear(from_pat),
+                Pattern::Clear(to_pat),
+                Number::Clear(count),
+            ) if from_pat.is_empty() => {
+                self.replace_empty_from_pat_unpadded_clear(str_ref, to_pat, Some(count))
+            }
+            (FheString::Unpadded(_), Pattern::Clear(from_pat), Pattern::Clear(to_pat), n)
+                if to_pat.len() == from_pat.len() =>
+            {
+                self.replace_same_len_pat_clear(encrypted_str, from_pat, to_pat, Some(n))
+            }
+            (FheString::Unpadded(_), Pattern::Clear(from_pat), Pattern::Clear(to_pat), n) => {
+                let padded = self.pad_string(encrypted_str);
+                self.replace_diff_len_pat_clear(&padded, from_pat, to_pat, Some(n))
+            }
+            (
+                FheString::Unpadded(_),
+                Pattern::Encrypted(from_pat),
+                Pattern::Encrypted(to_pat),
+                n,
+            ) if from_pat.as_ref().len() == to_pat.as_ref().len() => {
+                self.replace_same_len_pat_unpadded_encrypted(str_ref, from_pat, to_pat, Some(n))
+            }
+            // TODO: more effiecient versions for combinations of padded and unpadded
+            (
+                FheString::Unpadded(_),
+                Pattern::Encrypted(from_pat),
+                Pattern::Encrypted(to_pat),
+                n,
+            ) => self.replace_pat_encrypted(
+                &self.pad_string(encrypted_str),
+                &self.pad_string(from_pat),
+                &self.pad_string(to_pat),
+                Some(n),
+            ),
+
+            (FheString::Padded(_), Pattern::Clear(_), Pattern::Encrypted(_), _)
+            | (FheString::Padded(_), Pattern::Encrypted(_), Pattern::Clear(_), _)
+            | (FheString::Unpadded(_), Pattern::Clear(_), Pattern::Encrypted(_), _)
+            | (FheString::Unpadded(_), Pattern::Encrypted(_), Pattern::Clear(_), _) => {
+                // since both `from` and `to` need to be `P`
+                unreachable!("mixed replacement patterns are not supported")
+            }
+        }
+    }
+
     #[inline]
     fn replace_empty_from_pat_unpadded_clear(
         &self,
         str_ref: &[FheAsciiChar],
         to_pat: &str,
         max_count: Option<usize>,
-    ) -> FheString<Padded> {
+    ) -> FheString {
         let to_pat_enc = to_pat.as_bytes().par_iter().map(|x| {
             self.0
                 .create_trivial_radix::<u64, RadixCiphertext>(*x as u64, self.1)
@@ -38,8 +305,12 @@ impl ServerKey {
                 _ => {}
             }
         }
-        result.push(self.false_ct().into());
-        FheString::new_unchecked(result)
+        if max_count.is_some() {
+            result.push(self.false_ct().into());
+            FheString::new_unchecked_padded(result)
+        } else {
+            FheString::new_unchecked_unpadded(result)
+        }
     }
 
     /// A helper that intersperses `to_pat` between each character in `str_ref`
@@ -51,7 +322,7 @@ impl ServerKey {
         str_ref: &[FheAsciiChar],
         to_pat: &str,
         max_count: Option<usize>,
-    ) -> FheString<Padded> {
+    ) -> FheString {
         let to_pat_enc = to_pat.as_bytes().par_iter().map(|x| {
             self.0
                 .create_trivial_radix::<u64, RadixCiphertext>(*x as u64, self.1)
@@ -75,7 +346,7 @@ impl ServerKey {
             }
         }
         result.push(str_ref[str_ref.len() - 1].clone());
-        FheString::new_unchecked(result)
+        FheString::new_unchecked_padded(result)
     }
 
     /// A helper that replaces each occurence of `from_pat` with `to_pat` in
@@ -87,11 +358,12 @@ impl ServerKey {
     #[inline]
     fn replace_same_len_pat_clear(
         &self,
-        str_ref: &[FheAsciiChar],
+        enc_str: &FheString,
         from_pat: &str,
         to_pat: &str,
         max_count: Option<Number>,
-    ) -> FheString<Padded> {
+    ) -> FheString {
+        let str_ref = enc_str.as_ref();
         let to_pat_enc: Vec<_> = self.encrypt_clear_pat(to_pat);
         let pattern_starts = str_ref.par_windows(from_pat.len()).map(|window| {
             let starts = self.starts_with_clear_par(window, from_pat);
@@ -142,17 +414,26 @@ impl ServerKey {
                     .into();
             }
         }
-        FheString::new_unchecked(result)
+        if matches!(enc_str, FheString::Padded(_)) {
+            FheString::new_unchecked_padded(result)
+        } else {
+            FheString::new_unchecked_unpadded(result)
+        }
     }
 
+    /// A helper that replaces each occurence of `from_pat` with `to_pat` for unpadded patterns
+    /// in `str_ref` up to `max_count` times.
+    /// Assumes that `from_pat` and `to_pat` have the same length.
+    /// Assumes that `from_pat` is not empty.
+    /// Assumes that `from_pat` is not longer than `str_ref`.
     #[inline]
     fn replace_same_len_pat_unpadded_encrypted(
         &self,
         str_ref: &[FheAsciiChar],
-        from_pat: &FheString<Unpadded>,
-        to_pat: &FheString<Unpadded>,
+        from_pat: &FheString,
+        to_pat: &FheString,
         max_count: Option<Number>,
-    ) -> FheString<Unpadded> {
+    ) -> FheString {
         let to_pat_enc = to_pat.as_ref();
         let from_pat_enc = from_pat.as_ref();
         let pattern_starts = str_ref.par_windows(from_pat_enc.len()).map(|window| {
@@ -208,7 +489,7 @@ impl ServerKey {
                     .into();
             }
         }
-        FheString::new_unchecked(result)
+        FheString::new_unchecked_unpadded(result)
     }
 
     /// A helper that encrypts a clear pattern.
@@ -229,13 +510,14 @@ impl ServerKey {
     #[inline]
     fn replace_diff_len_pat_clear(
         &self,
-        str_ref: &[FheAsciiChar],
+        enc_str: &FheString,
         from_pat: &str,
         to_pat: &str,
         max_count: Option<Number>,
-    ) -> FheString<Padded> {
+    ) -> FheString {
+        let str_ref = enc_str.as_ref();
         if let Some(Number::Clear(0)) = max_count {
-            return FheString::new_unchecked(str_ref.to_vec());
+            return enc_str.clone();
         }
         let gt_than_zero = if let Some(Number::Encrypted(n)) = max_count.as_ref() {
             Some(self.0.scalar_gt_parallelized(n, 0))
@@ -266,7 +548,7 @@ impl ServerKey {
             |x, y| match (x, y) {
                 (Some((start_x, count_x)), Some((start_y, count_y))) => self
                     .accumulate_clear_pat_starts_diff_len_padded(
-                        &max_count, &start_x, count_x, start_y, count_y,
+                        &max_count, start_x, count_x, start_y, count_y,
                     ),
                 (None, y) => y.clone(),
                 (x, None) => x.clone(),
@@ -304,7 +586,8 @@ impl ServerKey {
         );
         self.fill_pattern(max_len, &mut result, &to_pat_enc, pattern_found_count);
         self.patch_empty_from_pattern(str_ref, from_pat, gt_than_zero, &mut result, &to_pat_enc);
-        FheString::new_unchecked(result)
+        result.push(self.false_ct().into());
+        FheString::new_unchecked_padded(result)
     }
 
     /// A helper that fills each 0 that matched "from pattern"
@@ -348,7 +631,8 @@ impl ServerKey {
         result: &mut Vec<FheAsciiChar>,
         to_pat_enc: &Vec<RadixCiphertext>,
     ) {
-        // TODO: extract to an optimized function to handle just this case instead of doing it in `replace_diff_len_pat_clear`?
+        // TODO: extract to an optimized function to handle just this case instead of doing it in
+        // `replace_diff_len_pat_clear`?
         if from_pat.is_empty() {
             let zero = self.false_ct();
             let mut str_ref_empty = self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64);
@@ -462,11 +746,11 @@ impl ServerKey {
     #[inline]
     fn replace_pat_encrypted(
         &self,
-        encrypted_str: &FheString<Padded>,
-        from_pat: &FheString<Padded>,
-        to_pat: &FheString<Padded>,
+        encrypted_str: &FheString,
+        from_pat: &FheString,
+        to_pat: &FheString,
         max_count: Option<Number>,
-    ) -> FheString<Padded> {
+    ) -> FheString {
         if let Some(Number::Clear(0)) = max_count {
             return encrypted_str.clone();
         }
@@ -501,7 +785,7 @@ impl ServerKey {
             || {
                 (0..str_ref.len()).into_par_iter().map(|i| {
                     self.enc_padded_pat_start(
-                        &str_ref,
+                        str_ref,
                         gt_than_zero.as_ref(),
                         from_pat_ref,
                         &from_pat_len,
@@ -522,12 +806,8 @@ impl ServerKey {
                 (Some((start_x, count_x, not_ended_x)), Some((start_y, count_y, not_ended_y))) => {
                     self.accumulate_enc_pat_starts_padded(
                         &adjusted_max_count,
-                        &start_x,
-                        count_x,
-                        not_ended_x,
-                        start_y,
-                        count_y,
-                        not_ended_y,
+                        (start_x, count_x, not_ended_x),
+                        (start_y, count_y, not_ended_y),
                     )
                 }
                 (None, y) => y.clone(),
@@ -565,7 +845,7 @@ impl ServerKey {
             &to_pat_notzeroes,
             pattern_found_count,
         );
-        FheString::new_unchecked(result)
+        FheString::new_unchecked_padded(result)
     }
 
     /// A helper to replace 0 characters in the encrypted `encrypted_str`
@@ -576,7 +856,7 @@ impl ServerKey {
         to_pat_ref: &[FheAsciiChar],
         max_len: usize,
         result: &mut Vec<FheAsciiChar>,
-        to_pat_notzeroes: &Vec<RadixCiphertext>,
+        to_pat_notzeroes: &[RadixCiphertext],
         mut pattern_found_count: FheUsize,
     ) {
         // TODO: can this be parallelized?
@@ -627,11 +907,11 @@ impl ServerKey {
                         let lhs = self
                             .0
                             .create_trivial_radix::<u64, RadixCiphertext>(i as u64, self.1);
-                        let rhs = self.0.mul_parallelized(&count, &shrink_shift_len);
+                        let rhs = self.0.mul_parallelized(&count, shrink_shift_len);
                         self.0.sub_parallelized(&lhs, &rhs)
                     },
                     || {
-                        let lhs = self.0.mul_parallelized(&count, &grow_shift_len);
+                        let lhs = self.0.mul_parallelized(&count, grow_shift_len);
                         self.0.scalar_add_parallelized(&lhs, i as u64)
                     },
                 );
@@ -663,7 +943,7 @@ impl ServerKey {
             self.0.bitand_assign_parallelized(&mut starts, gt_z);
         }
         Some((
-            self.0.mul_parallelized(&starts, &from_pat_len),
+            self.0.mul_parallelized(&starts, from_pat_len),
             starts,
             not_ended,
         ))
@@ -679,12 +959,8 @@ impl ServerKey {
     fn accumulate_enc_pat_starts_padded(
         &self,
         adjusted_max_count: &FheUsize,
-        start_x: &FheUsize,
-        count_x: &FheUsize,
-        not_ended_x: &FheBool,
-        start_y: &FheUsize,
-        count_y: &FheUsize,
-        not_ended_y: &FheBool,
+        (start_x, count_x, not_ended_x): (&FheUsize, &FheUsize, &FheBool),
+        (start_y, count_y, not_ended_y): (&FheUsize, &FheUsize, &FheBool),
     ) -> Option<(FheUsize, FheUsize, FheBool)> {
         let count = self.0.add_parallelized(count_x, count_y);
         let not_ended = self.0.bitor_parallelized(not_ended_x, not_ended_y);
@@ -700,8 +976,8 @@ impl ServerKey {
         let mut start_y_not_ended = self.0.bitand_parallelized(&next_pattern, not_ended_y);
 
         let (min_next_count, not_reached_max_count) = rayon::join(
-            || self.0.min_parallelized(&next_count, &adjusted_max_count),
-            || self.0.le_parallelized(&next_count, &adjusted_max_count),
+            || self.0.min_parallelized(&next_count, adjusted_max_count),
+            || self.0.le_parallelized(&next_count, adjusted_max_count),
         );
         next_count = min_next_count;
 
@@ -730,354 +1006,16 @@ impl ServerKey {
             Some(Number::Clear(mc)) => {
                 let enc_mc = self.0.create_trivial_radix(mc as u64, self.1);
                 self.0
-                    .if_then_else_parallelized(&str_ref_empty, &self.true_ct(), &enc_mc)
+                    .if_then_else_parallelized(str_ref_empty, &self.true_ct(), &enc_mc)
             }
             Some(Number::Encrypted(mc)) => {
                 self.0
-                    .if_then_else_parallelized(&str_ref_empty, &self.true_ct(), &mc)
+                    .if_then_else_parallelized(str_ref_empty, &self.true_ct(), &mc)
             }
             None => {
                 let enc_mc = self.0.create_trivial_radix(u64::MAX, self.1);
                 self.0
-                    .if_then_else_parallelized(&str_ref_empty, &self.true_ct(), &enc_mc)
-            }
-        }
-    }
-
-    /// Replaces all matches of a pattern with another string.
-    ///
-    /// `replace` creates a new [`FheString`], and copies the data from `encrypted_str` into it.
-    /// While doing so, it attempts to find matches of a pattern. If it finds any, it
-    /// replaces them with the replacement string slice.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
-    ///
-    /// let s = client_key.encrypt_str("this is old").unwrap();
-    /// assert_eq!(
-    ///     "this is new",
-    ///     client_key.decrypt_str(&server_key.replace(&s, "old", "new"))
-    /// );
-    /// assert_eq!(
-    ///     "than an old",
-    ///     client_key.decrypt_str(&server_key.replace(&s, "is", "an"))
-    /// );
-    /// let old = client_key.encrypt_str("old").unwrap();
-    /// let new = client_key.encrypt_str("new").unwrap();
-    /// let is = client_key.encrypt_str("is").unwrap();
-    /// let an = client_key.encrypt_str("an").unwrap();
-    /// assert_eq!(
-    ///     "this is new",
-    ///     client_key.decrypt_str(&server_key.replace(&s, &old, &new))
-    /// );
-    /// assert_eq!(
-    ///     "than an old",
-    ///     client_key.decrypt_str(&server_key.replace(&s, &is, &an))
-    /// );
-    /// ```
-    ///
-    /// When the pattern doesn't match, it returns `encrypted_str` as [`FheString`]:
-    ///
-    /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
-    ///
-    /// let s = client_key.encrypt_str("this is old").unwrap();
-    /// assert_eq!(
-    ///     "this is old",
-    ///     client_key.decrypt_str(&server_key.replace(&s, "X", "Y"))
-    /// );
-    /// let x = client_key.encrypt_str("X").unwrap();
-    /// let y = client_key.encrypt_str("Y").unwrap();
-    /// assert_eq!(
-    ///     "this is old",
-    ///     client_key.decrypt_str(&server_key.replace(&s, &x, &y))
-    /// );
-    /// ```
-    /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
-    /// API not fully fleshed out and ready to be stabilized
-    /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
-    #[must_use = "this returns the replaced FheString as a new allocation, \
-                      without modifying the original"]
-    #[inline]
-    pub fn replace<'a, P: Into<Pattern<'a, Padded>>>(
-        &self,
-        encrypted_str: &FheString<Padded>,
-        from: P,
-        to: P,
-    ) -> FheString<Padded> {
-        let str_ref = encrypted_str.as_ref();
-        match (from.into(), to.into()) {
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat))
-                if from_pat.is_empty() && to_pat.is_empty() =>
-            {
-                encrypted_str.clone()
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat)) if from_pat.is_empty() => {
-                self.replace_empty_from_pat_padded_clear(str_ref, to_pat, None)
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat))
-                if to_pat.len() == from_pat.len() =>
-            {
-                self.replace_same_len_pat_clear(str_ref, from_pat, to_pat, None)
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat)) => {
-                self.replace_diff_len_pat_clear(str_ref, from_pat, to_pat, None)
-            }
-            (Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat)) => {
-                self.replace_pat_encrypted(encrypted_str, from_pat, to_pat, None)
-            }
-            _ => {
-                // since both `from` and `to` need to be `P`
-                unreachable!("mixed replacement patterns are not supported")
-            }
-        }
-    }
-
-    #[must_use = "this returns the replaced FheString as a new allocation, \
-                      without modifying the original"]
-    #[inline]
-    pub fn replace_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        from: P,
-        to: P,
-    ) -> FheString<Padded> {
-        let str_ref = encrypted_str.as_ref();
-        match (from.into(), to.into()) {
-            (Pattern::Clear(from_pat), _) if !from_pat.is_empty() && str_ref.is_empty() =>
-            // unpadded
-            {
-                self.pad_string(encrypted_str)
-            }
-            (Pattern::Encrypted(from_pat), _)
-                if !from_pat.as_ref().is_empty() && str_ref.is_empty() =>
-            // unpadded
-            {
-                self.pad_string(encrypted_str)
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat))
-                if from_pat.is_empty() && to_pat.is_empty() =>
-            {
-                // unpadded
-                self.pad_string(encrypted_str)
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat)) if from_pat.is_empty() => {
-                // padding needed for count
-                self.replace_empty_from_pat_unpadded_clear(str_ref, to_pat, None)
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat))
-                if to_pat.len() == from_pat.len() =>
-            {
-                // unpadded
-                self.replace_same_len_pat_clear(str_ref, from_pat, to_pat, None)
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat)) => {
-                // padding needed
-                self.replace_diff_len_pat_clear(str_ref, from_pat, to_pat, None)
-            }
-            (Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat))
-                if from_pat.as_ref().len() == to_pat.as_ref().len() =>
-            {
-                // unpadded
-                self.pad_string(
-                    &self.replace_same_len_pat_unpadded_encrypted(str_ref, from_pat, to_pat, None),
-                )
-            }
-
-            (Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat)) => self
-                .replace_pat_encrypted(
-                    &self.pad_string(encrypted_str),
-                    &self.pad_string(from_pat),
-                    &self.pad_string(to_pat),
-                    None,
-                ),
-            _ => {
-                // since both `from` and `to` need to be `P`
-                unreachable!("mixed replacement patterns are not supported")
-            }
-        }
-    }
-
-    /// Replaces first N matches of a pattern with another string.
-    ///
-    /// `replacen` creates a new [`FheString`], and copies the data from  `encrypted_str` into it.
-    /// While doing so, it attempts to find matches of a pattern. If it finds any, it
-    /// replaces them with the replacement string slice at most `count` times.
-    ///
-    /// `count` can either be a [`Number::Clear`] or a [`Number::Encrypted`].
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```
-    /// let s = "foo foo 123 foo";
-    /// assert_eq!("new new 123 foo", s.replacen("foo", "new", 2));
-    /// assert_eq!("faa fao 123 foo", s.replacen('o', "a", 3));
-
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
-    ///
-    /// let s = client_key.encrypt_str("foo foo 123 foo").unwrap();
-    /// assert_eq!("new new 123 foo", client_key.decrypt_str(&server_key.replacen(&s, "foo", "new",
-    /// 2))); let foo = client_key.encrypt_str("foo").unwrap();
-    /// let new = client_key.encrypt_str("new").unwrap();
-    /// let count2 = client_key.encrypt_usize(2);
-    /// assert_eq!("new new 123 foo", client_key.decrypt_str(&server_key.replacen(&s, foo, new,
-    /// count2))); assert_eq!("faa fao 123 foo", client_key.decrypt_str(&server_key.replacen(&s,
-    /// "o", "a", 3))); let o = client_key.encrypt_str("o").unwrap();
-    /// let a = client_key.encrypt_str("a").unwrap();
-    /// let count3 = client_key.encrypt_usize(3);
-    /// assert_eq!("faa fao 123 foo", client_key.decrypt_str(&server_key.replacen(&s, "o", "a",
-    /// count3))); ```
-    ///
-    /// When the pattern doesn't match, it returns this string slice as [`String`]:
-    /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
-    ///
-    /// let s = client_key.encrypt_str("this is old").unwrap();
-    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replacen(&s, "cookie monster",
-    /// "little lamb", 10))); let cm = client_key.encrypt_str("cookie monster").unwrap();
-    /// let ll = client_key.encrypt_str("little lamb").unwrap();
-    /// let count10 = client_key.encrypt_usize(10);
-    /// assert_eq!("this is old", client_key.decrypt_str(&server_key.replacen(&s, &cm, &ll,
-    /// count10))); ```
-    #[must_use = "this returns the replaced `FheString` as a new allocation, \
-                      without modifying the original"]
-    pub fn replacen<'a, P: Into<Pattern<'a, Padded>>, N: Into<Number>>(
-        &'a self,
-        encrypted_str: &FheString<Padded>,
-        from: P,
-        to: P,
-        count: N,
-    ) -> FheString<Padded> {
-        let str_ref = encrypted_str.as_ref();
-        match (from.into(), to.into(), count.into()) {
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), _)
-                if (from_pat.is_empty() && to_pat.is_empty()) =>
-            {
-                encrypted_str.clone()
-            }
-            (_, _, Number::Clear(0)) => encrypted_str.clone(),
-            // TODO: CLear/Clear/Encrypted works via replace_diff_len_pat_clear, but may can be made
-            // more efficient?
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), Number::Clear(count))
-                if from_pat.is_empty() =>
-            {
-                self.replace_empty_from_pat_padded_clear(str_ref, to_pat, Some(count))
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), n)
-                if to_pat.len() == from_pat.len() =>
-            {
-                self.replace_same_len_pat_clear(str_ref, from_pat, to_pat, Some(n))
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), n) => {
-                self.replace_diff_len_pat_clear(str_ref, from_pat, to_pat, Some(n))
-            }
-            (Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat), n) => {
-                self.replace_pat_encrypted(encrypted_str, from_pat, to_pat, Some(n))
-            }
-            (Pattern::Clear(_), Pattern::Encrypted(_), _) => {
-                // since both `from` and `to` need to be `P`
-                unreachable!("mixed replacement patterns are not supported")
-            }
-            (Pattern::Encrypted(_), Pattern::Clear(_), _) => {
-                // since both `from` and `to` need to be `P`
-                unreachable!("mixed replacement patterns are not supported")
-            }
-        }
-    }
-
-    #[must_use = "this returns the replaced `FheString` as a new allocation, \
-                      without modifying the original"]
-    pub fn replacen_unpadded<'a, P: Into<Pattern<'a, Unpadded>>, N: Into<Number>>(
-        &'a self,
-        encrypted_str: &FheString<Unpadded>,
-        from: P,
-        to: P,
-        count: N,
-    ) -> FheString<Padded> {
-        let str_ref = encrypted_str.as_ref();
-        match (from.into(), to.into(), count.into()) {
-            (Pattern::Clear(from_pat), _, _) if !from_pat.is_empty() && str_ref.is_empty() =>
-            // unpadded
-            {
-                self.pad_string(encrypted_str)
-            }
-            (Pattern::Encrypted(from_pat), _, _)
-                if !from_pat.as_ref().is_empty() && str_ref.is_empty() =>
-            // unpadded
-            {
-                self.pad_string(encrypted_str)
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), _)
-                if (from_pat.is_empty() && to_pat.is_empty()) =>
-            {
-                // unpadded
-                self.pad_string(encrypted_str)
-            }
-            (_, _, Number::Clear(0)) =>
-            // unpadded
-            {
-                self.pad_string(encrypted_str)
-            }
-            // TODO: CLear/Clear/Encrypted works via replace_diff_len_pat_clear, but may can be made
-            // more efficient?
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), Number::Clear(count))
-                if from_pat.is_empty() =>
-            {
-                // padding needed for count
-                self.replace_empty_from_pat_unpadded_clear(str_ref, to_pat, Some(count))
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), n)
-                if to_pat.len() == from_pat.len() =>
-            {
-                // unpadded
-                let padded = self.pad_string(encrypted_str);
-                self.replace_same_len_pat_clear(padded.as_ref(), from_pat, to_pat, Some(n))
-            }
-            (Pattern::Clear(from_pat), Pattern::Clear(to_pat), n) => {
-                // padded
-                let padded = self.pad_string(encrypted_str);
-                self.replace_diff_len_pat_clear(padded.as_ref(), from_pat, to_pat, Some(n))
-            }
-            (Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat), n)
-                if from_pat.as_ref().len() == to_pat.as_ref().len() =>
-            {
-                // unpadded
-                self.pad_string(&self.replace_same_len_pat_unpadded_encrypted(
-                    str_ref,
-                    from_pat,
-                    to_pat,
-                    Some(n),
-                ))
-            }
-
-            (Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat), n) => self
-                .replace_pat_encrypted(
-                    &self.pad_string(encrypted_str),
-                    &self.pad_string(from_pat),
-                    &self.pad_string(to_pat),
-                    Some(n),
-                ),
-            (Pattern::Clear(_), Pattern::Encrypted(_), _) => {
-                // since both `from` and `to` need to be `P`
-                unreachable!("mixed replacement patterns are not supported")
-            }
-            (Pattern::Encrypted(_), Pattern::Clear(_), _) => {
-                // since both `from` and `to` need to be `P`
-                unreachable!("mixed replacement patterns are not supported")
+                    .if_then_else_parallelized(str_ref_empty, &self.true_ct(), &enc_mc)
             }
         }
     }
@@ -1123,23 +1061,19 @@ mod test {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
         println!("clear: {input} {pattern} {replacement}");
 
         assert_eq!(
             input.replace(pattern, replacement),
-            client_key.decrypt_str(&server_key.replace_unpadded(
-                &encrypted_str,
-                pattern,
-                replacement
-            ))
+            client_key.decrypt_str(&server_key.replace(&encrypted_str, pattern, replacement))
         );
-        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
-        let encrypted_replacement = client_key.encrypt_str_unpadded(replacement).unwrap();
+        let encrypted_pattern = client_key.encrypt_str(pattern).unwrap();
+        let encrypted_replacement = client_key.encrypt_str(replacement).unwrap();
         println!("encrypted: {input} {pattern} {replacement}");
         assert_eq!(
             input.replace(pattern, replacement),
-            client_key.decrypt_str(&server_key.replace_unpadded(
+            client_key.decrypt_str(&server_key.replace(
                 &encrypted_str,
                 &encrypted_pattern,
                 &encrypted_replacement
@@ -1315,34 +1249,29 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
         let encrypted_n = client_key.encrypt_usize(n);
         println!("clear clear: {input} {pattern} {replacement} {n}");
         assert_eq!(
             input.replacen(pattern, replacement, n),
-            client_key.decrypt_str(&server_key.replacen_unpadded(
-                &encrypted_str,
-                pattern,
-                replacement,
-                n
-            ))
+            client_key.decrypt_str(&server_key.replacen(&encrypted_str, pattern, replacement, n))
         );
         println!("clear encrypted: {input} {pattern} {replacement} {n}");
         assert_eq!(
             input.replacen(pattern, replacement, n),
-            client_key.decrypt_str(&server_key.replacen_unpadded(
+            client_key.decrypt_str(&server_key.replacen(
                 &encrypted_str,
                 pattern,
                 replacement,
                 encrypted_n.clone()
             ))
         );
-        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
-        let encrypted_replacement = client_key.encrypt_str_unpadded(replacement).unwrap();
+        let encrypted_pattern = client_key.encrypt_str(pattern).unwrap();
+        let encrypted_replacement = client_key.encrypt_str(replacement).unwrap();
         println!("encrypted clear: {input} {pattern} {replacement} {n}");
         assert_eq!(
             input.replacen(pattern, replacement, n),
-            client_key.decrypt_str(&server_key.replacen_unpadded(
+            client_key.decrypt_str(&server_key.replacen(
                 &encrypted_str,
                 &encrypted_pattern,
                 &encrypted_replacement,
@@ -1352,7 +1281,7 @@ mod test {
         println!("encrypted encrypted: {input} {pattern} {replacement} {n}");
         assert_eq!(
             input.replacen(pattern, replacement, n),
-            client_key.decrypt_str(&server_key.replacen_unpadded(
+            client_key.decrypt_str(&server_key.replacen(
                 &encrypted_str,
                 &encrypted_pattern,
                 &encrypted_replacement,

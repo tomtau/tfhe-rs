@@ -1,6 +1,6 @@
 use rayon::iter::{ParallelExtend, ParallelIterator};
 
-use crate::ciphertext::{FheString, Number, Padded, Pattern};
+use crate::ciphertext::{FheString, Number, Pattern};
 use crate::server_key::ServerKey;
 
 use super::{FhePatternLen, FheSplitResult, SplitFoundPattern};
@@ -59,13 +59,15 @@ impl ServerKey {
     ///   vec![""]
     /// );
     #[inline]
-    pub fn splitn<'a, N: Into<Number>, P: Into<Pattern<'a, Padded>>>(
+    pub fn splitn<'a, N: Into<Number>, P: Into<Pattern<'a>>>(
         &self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         n: N,
         pat: P,
     ) -> FheSplitResult {
-        let str_ref = encrypted_str.as_ref();
+        let enc_str = self.pad_string(encrypted_str); // TODO: is it necessary?
+
+        let str_ref = enc_str.as_ref();
         let str_len = str_ref.len();
         match (pat.into(), n.into()) {
             (_, Number::Clear(0)) => FheSplitResult::SplitN(
@@ -147,13 +149,15 @@ impl ServerKey {
                 split_sequence.par_extend(self.split_compute(accumulated_starts, str_ref, &zero));
                 FheSplitResult::SplitN(zero_count, FhePatternLen::Plain(pat.len()), split_sequence)
             }
-            (Pattern::Encrypted(pat), count) => {
+            (Pattern::Encrypted(p), count) => {
+                let pat = self.pad_string(p); // TODO: unpadded version
+
                 let zero_count = match &count {
                     Number::Encrypted(mc) => Some(self.0.scalar_eq_parallelized(mc, 0u64)),
                     _ => None,
                 };
                 let (orig_len, split_sequence) =
-                    self.encrypted_split(str_len, str_ref, pat, Some(count));
+                    self.encrypted_split(str_len, str_ref, &pat, Some(count));
                 FheSplitResult::SplitN(
                     zero_count,
                     FhePatternLen::Encrypted(orig_len),

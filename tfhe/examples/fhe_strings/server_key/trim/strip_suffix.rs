@@ -3,7 +3,7 @@ use rayon::iter::{
     ParallelIterator,
 };
 
-use crate::ciphertext::{FheOption, FheString, Padded, Pattern, Unpadded};
+use crate::ciphertext::{FheOption, FheString, Pattern};
 use crate::scan::scan;
 use crate::server_key::ServerKey;
 
@@ -58,13 +58,13 @@ impl ServerKey {
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[must_use = "this returns the remaining substring as a new FheString, \
                   without modifying the original"]
-    pub fn strip_suffix<'a, P: Into<Pattern<'a, Padded>>>(
+    pub fn strip_suffix<'a, P: Into<Pattern<'a>>>(
         &self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         suffix: P,
-    ) -> FheOption<FheString<Padded>> {
-        match suffix.into() {
-            Pattern::Clear(pat) => {
+    ) -> FheOption<FheString> {
+        match (encrypted_str, suffix.into()) {
+            (FheString::Padded(_), Pattern::Clear(pat)) => {
                 if pat.is_empty() {
                     return (self.true_ct(), encrypted_str.clone());
                 }
@@ -87,10 +87,10 @@ impl ServerKey {
                 result.push(fst.last().cloned().expect("last element"));
                 (
                     found.unwrap_or_else(|| self.false_ct()),
-                    FheString::new_unchecked(result),
+                    FheString::new_unchecked_padded(result),
                 )
             }
-            Pattern::Encrypted(pat) => {
+            (FheString::Padded(_), Pattern::Encrypted(pat @ FheString::Padded(_))) => {
                 let snd = pat.as_ref();
                 if snd.len() < 2 {
                     return (self.true_ct(), encrypted_str.clone());
@@ -118,24 +118,15 @@ impl ServerKey {
                         .if_then_else_parallelized(&cond, &self.false_ct(), c.as_ref())
                         .into()
                 }));
-                (found, FheString::new_unchecked(result))
+                (found, FheString::new_unchecked_padded(result))
             }
-        }
-    }
-
-    pub fn strip_suffix_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        suffix: P,
-    ) -> FheOption<FheString<Padded>> {
-        match suffix.into() {
-            Pattern::Clear(pat) => {
+            (FheString::Unpadded(_), Pattern::Clear(pat)) => {
                 if pat.is_empty() {
-                    return (self.true_ct(), self.pad_string(encrypted_str));
+                    return (self.true_ct(), encrypted_str.clone());
                 }
                 let fst = encrypted_str.as_ref();
                 if pat.len() > fst.len() {
-                    return (self.false_ct(), self.pad_string(encrypted_str));
+                    return (self.false_ct(), encrypted_str.clone());
                 }
                 let suffix_start = fst.len() - pat.len();
                 let suffix_found = self.starts_with_clear_par(&fst[suffix_start..], pat);
@@ -151,16 +142,16 @@ impl ServerKey {
                     }
                 }));
                 result.push(zero.into());
-                (suffix_found, FheString::new_unchecked(result))
+                (suffix_found, FheString::new_unchecked_padded(result))
             }
-            Pattern::Encrypted(pat) => {
+            (FheString::Unpadded(_), Pattern::Encrypted(pat @ FheString::Unpadded(_))) => {
                 let snd = pat.as_ref();
                 if snd.is_empty() {
-                    return (self.true_ct(), self.pad_string(encrypted_str));
+                    return (self.true_ct(), encrypted_str.clone());
                 }
                 let fst = encrypted_str.as_ref();
                 if snd.len() > fst.len() {
-                    return (self.false_ct(), self.pad_string(encrypted_str));
+                    return (self.false_ct(), encrypted_str.clone());
                 }
                 let fst = encrypted_str.as_ref();
                 let suffix_start = fst.len() - snd.len();
@@ -177,7 +168,13 @@ impl ServerKey {
                     }
                 }));
                 result.push(zero.into());
-                (suffix_found, FheString::new_unchecked(result))
+                (suffix_found, FheString::new_unchecked_padded(result))
+            }
+            // TODO: more effiecient versions for combinations of padded and unpadded
+            (x, Pattern::Encrypted(y)) => {
+                let px = self.pad_string(x);
+                let py = self.pad_string(y);
+                self.strip_suffix(&px, &py)
             }
         }
     }
@@ -224,20 +221,18 @@ mod test {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
         assert_eq!(
             input.strip_suffix(pattern),
             client_key
-                .decrypt_option_str(&server_key.strip_suffix_unpadded(&encrypted_str, pattern))
+                .decrypt_option_str(&server_key.strip_suffix(&encrypted_str, pattern))
                 .as_deref()
         );
-        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        let encrypted_pattern = client_key.encrypt_str(pattern).unwrap();
         assert_eq!(
             input.strip_suffix(pattern),
             client_key
-                .decrypt_option_str(
-                    &server_key.strip_suffix_unpadded(&encrypted_str, &encrypted_pattern)
-                )
+                .decrypt_option_str(&server_key.strip_suffix(&encrypted_str, &encrypted_pattern))
                 .as_deref()
         );
     }

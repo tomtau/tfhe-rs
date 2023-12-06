@@ -1,4 +1,4 @@
-use crate::ciphertext::{FheBool, FheString, Padded, Pattern, Unpadded};
+use crate::ciphertext::{FheBool, FheString, Pattern};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -27,27 +27,22 @@ impl ServerKey {
     /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
     /// API not fully fleshed out and ready to be stabilized
     /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
-    pub fn starts_with<'a, P: Into<Pattern<'a, Padded>>>(
+    pub fn starts_with<'a, P: Into<Pattern<'a>>>(
         &self,
-        encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
         pat: P,
     ) -> FheBool {
-        match pat.into() {
-            Pattern::Clear(pat) => self.starts_with_clear_par(encrypted_str.as_ref(), pat),
-            Pattern::Encrypted(pat) => {
+        match (encrypted_str, pat.into()) {
+            (FheString::Padded(_), Pattern::Clear(pat)) => {
+                self.starts_with_clear_par(encrypted_str.as_ref(), pat)
+            }
+            (FheString::Padded(_), Pattern::Encrypted(FheString::Padded(pat))) => {
                 self.starts_with_encrypted_par(encrypted_str.as_ref(), pat.as_ref())
             }
-        }
-    }
-
-    pub fn starts_with_unpadded<'a, P: Into<Pattern<'a, Unpadded>>>(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        pat: P,
-    ) -> FheBool {
-        match pat.into() {
-            Pattern::Clear(pat) => self.starts_with_clear_par(encrypted_str.as_ref(), pat),
-            Pattern::Encrypted(pat) => {
+            (FheString::Unpadded(_), Pattern::Clear(pat)) => {
+                self.starts_with_clear_par(encrypted_str.as_ref(), pat)
+            }
+            (FheString::Unpadded(_), Pattern::Encrypted(pat @ FheString::Unpadded(_))) => {
                 let snd = pat.as_ref();
                 if snd.is_empty() {
                     return self.true_ct();
@@ -57,6 +52,12 @@ impl ServerKey {
                     return self.false_ct();
                 }
                 self.par_eq(fst, snd)
+            }
+            // TODO: more effiecient versions for combinations of padded and unpadded
+            (x, Pattern::Encrypted(y)) => {
+                let px = self.pad_string(x);
+                let py = self.pad_string(y);
+                self.starts_with(&px, &py)
             }
         }
     }
@@ -99,16 +100,15 @@ mod test {
         let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
-        let encrypted_str = client_key.encrypt_str_unpadded(input).unwrap();
-        let encrypted_pattern = client_key.encrypt_str_unpadded(pattern).unwrap();
+        let encrypted_str = client_key.encrypt_str(input).unwrap();
+        let encrypted_pattern = client_key.encrypt_str(pattern).unwrap();
         assert_eq!(
             input.starts_with(pattern),
-            client_key.decrypt_bool(&server_key.starts_with_unpadded(&encrypted_str, pattern))
+            client_key.decrypt_bool(&server_key.starts_with(&encrypted_str, pattern))
         );
         assert_eq!(
             input.starts_with(pattern),
-            client_key
-                .decrypt_bool(&server_key.starts_with_unpadded(&encrypted_str, &encrypted_pattern))
+            client_key.decrypt_bool(&server_key.starts_with(&encrypted_str, &encrypted_pattern))
         );
     }
 }

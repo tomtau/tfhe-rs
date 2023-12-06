@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheString, Padded, Unpadded};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString};
 use crate::server_key::ServerKey;
 
 impl ServerKey {
@@ -27,37 +27,40 @@ impl ServerKey {
     #[inline]
     pub fn eq_ignore_case(
         &self,
-        encrypted_str: &FheString<Padded>,
-        other_encrypted_str: &FheString<Padded>,
+        encrypted_str: &FheString,
+        other_encrypted_str: &FheString,
     ) -> FheBool {
-        let fst = encrypted_str.as_ref();
-        let snd = other_encrypted_str.as_ref();
-        match fst.len().cmp(&snd.len()) {
-            Ordering::Less => self.0.bitand_parallelized(
-                &self.par_eq_ignore_ascii_case(fst, &snd[..fst.len()]),
-                &self.par_eq_zero(&snd[fst.len()..]),
-            ),
-            Ordering::Equal => self.par_eq_ignore_ascii_case(fst, snd),
-            Ordering::Greater => self.0.bitand_parallelized(
-                &self.par_eq_ignore_ascii_case(&fst[..snd.len()], snd),
-                &self.par_eq_zero(&fst[snd.len()..]),
-            ),
-        }
-    }
-
-    #[must_use]
-    #[inline]
-    pub fn eq_ignore_case_unpadded(
-        &self,
-        encrypted_str: &FheString<Unpadded>,
-        other_encrypted_str: &FheString<Unpadded>,
-    ) -> FheBool {
-        let fst = encrypted_str.as_ref();
-        let snd = other_encrypted_str.as_ref();
-        match fst.len().cmp(&snd.len()) {
-            Ordering::Less => self.false_ct(),
-            Ordering::Equal => self.par_eq_ignore_ascii_case(fst, snd),
-            Ordering::Greater => self.false_ct(),
+        match (encrypted_str, other_encrypted_str) {
+            (FheString::Padded(_), FheString::Padded(_)) => {
+                let fst = encrypted_str.as_ref();
+                let snd = other_encrypted_str.as_ref();
+                match fst.len().cmp(&snd.len()) {
+                    Ordering::Less => self.0.bitand_parallelized(
+                        &self.par_eq_ignore_ascii_case(fst, &snd[..fst.len()]),
+                        &self.par_eq_zero(&snd[fst.len()..]),
+                    ),
+                    Ordering::Equal => self.par_eq_ignore_ascii_case(fst, snd),
+                    Ordering::Greater => self.0.bitand_parallelized(
+                        &self.par_eq_ignore_ascii_case(&fst[..snd.len()], snd),
+                        &self.par_eq_zero(&fst[snd.len()..]),
+                    ),
+                }
+            }
+            (FheString::Unpadded(_), FheString::Unpadded(_)) => {
+                let fst = encrypted_str.as_ref();
+                let snd = other_encrypted_str.as_ref();
+                match fst.len().cmp(&snd.len()) {
+                    Ordering::Less => self.false_ct(),
+                    Ordering::Equal => self.par_eq_ignore_ascii_case(fst, snd),
+                    Ordering::Greater => self.false_ct(),
+                }
+            }
+            // TODO: more effiecient versions for combinations of padded and unpadded
+            (x, y) => {
+                let px = self.pad_string(x);
+                let py = self.pad_string(y);
+                self.eq_ignore_case(&px, &py)
+            }
         }
     }
 
@@ -110,12 +113,11 @@ mod test {
         let client_key = client_key::ClientKey::from(ck);
         let server_key = server_key::ServerKey::from(sk);
 
-        let encrypted_str2 = client_key.encrypt_str_unpadded(input2).unwrap();
-        let encrypted_str = client_key.encrypt_str_unpadded(input1).unwrap();
+        let encrypted_str2 = client_key.encrypt_str(input2).unwrap();
+        let encrypted_str = client_key.encrypt_str(input1).unwrap();
         assert_eq!(
             input1.eq_ignore_ascii_case(input2),
-            client_key
-                .decrypt_bool(&server_key.eq_ignore_case_unpadded(&encrypted_str, &encrypted_str2))
+            client_key.decrypt_bool(&server_key.eq_ignore_case(&encrypted_str, &encrypted_str2))
         );
     }
 }
