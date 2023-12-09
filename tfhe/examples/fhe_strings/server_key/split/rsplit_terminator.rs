@@ -49,7 +49,7 @@ impl ServerKey {
         encrypted_str: &FheString,
         pat: P,
     ) -> FheSplitResult {
-        let (pat_len, pattern_splits) = self.rsplit_inner(encrypted_str, pat);
+        let (pat_len, pattern_splits) = self.rsplit_inner(encrypted_str, pat, false);
         //	                      ______
         //	                   <((((((\\\
         //	                   /      . }\
@@ -87,6 +87,9 @@ mod test {
         ("010", "0"),
         ("rust", ""),
         ("    a  b c", " "),
+        ("1111111", "11"),
+        ("123123123", "123"),
+        ("12121212121", "1212"),
         ("banana", "ana"),
         ("foo:bar", "foo:"),
         ("foo:bar", "bar"),

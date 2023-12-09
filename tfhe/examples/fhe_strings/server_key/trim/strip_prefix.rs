@@ -2,6 +2,7 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelExtend,
     ParallelIterator,
 };
+use tfhe::integer::RadixCiphertext;
 
 use crate::ciphertext::{FheOption, FheString, Pattern};
 use crate::server_key::ServerKey;
@@ -98,60 +99,40 @@ impl ServerKey {
                 if pat_l < 2 {
                     (self.true_ct(), encrypted_str.clone())
                 } else {
-                    let pattern_found = enc_ref.par_iter().zip(pat_ref.par_iter()).map(|(a, b)| {
-                        let ((pattern_ended, a_eq_b), pattern_not_ended) = rayon::join(
-                            || {
-                                rayon::join(
-                                    || self.0.scalar_eq_parallelized(b.as_ref(), 0),
-                                    || self.0.eq_parallelized(a.as_ref(), b.as_ref()),
-                                )
-                            },
-                            || self.0.scalar_ne_parallelized(b.as_ref(), 0),
-                        );
-                        (
-                            Some(self.0.if_then_else_parallelized(
-                                &pattern_ended,
-                                &self.true_ct(),
-                                &a_eq_b,
-                            )),
-                            pattern_not_ended,
-                        )
-                    });
-                    let not_ending = pattern_found.clone().map(|(_, x)| x);
-                    let starts_with = pattern_found
-                        .map(|(x, _)| x)
-                        .reduce(|| None, |s, x| self.and_true(s.as_ref(), x.as_ref()))
-                        .unwrap_or_else(|| self.false_ct());
-                    let pattern_not_ended: Vec<_> = not_ending
-                        .map(|x| self.0.bitand_parallelized(&starts_with, &x))
-                        .collect();
-                    let mut result = Vec::with_capacity(str_l);
-                    let zero = self.false_ct();
-                    result.par_extend((0..str_l).into_par_iter().map(|i| {
-                        let window = &enc_ref[i..std::cmp::min(i + pat_l + 1, str_l)];
-
-                        let mut c = window[0].clone();
-                        // TODO: can this be parallelized?
-                        for j in 1..window.len() {
-                            let c_to_move = if i + pat_l < str_l {
-                                window[j].as_ref()
-                            } else {
-                                &zero
-                            };
-                            // move starts_with and if pattern is not ended at j - 1
-                            c = self
+                    let fst = encrypted_str.as_ref();
+                    let (starts_with, pat_l) =
+                        rayon::join(|| self.starts_with(encrypted_str, pat), || self.len(pat));
+                    // TODO: could return a "broken" / one-off version of string here without doing
+                    // the shifting
+                    let shifted_indices: Vec<_> = (0..str_l)
+                        .into_par_iter()
+                        .map(|i| {
+                            let enc_i = self
                                 .0
-                                .if_then_else_parallelized(
-                                    &pattern_not_ended[j - 1],
-                                    c_to_move,
-                                    c.as_ref(),
-                                )
-                                .into();
-                        }
-                        c
-                    }));
-                    result.push(enc_ref.last().cloned().expect("last element"));
+                                .create_trivial_radix::<u64, RadixCiphertext>(i as u64, self.1);
+                            let shifted_i = self.0.sub_parallelized(&enc_i, &pat_l);
+                            self.0
+                                .if_then_else_parallelized(&starts_with, &shifted_i, &enc_i)
+                        })
+                        .collect();
 
+                    let mut result = Vec::with_capacity(fst.len());
+                    result.par_extend((0..str_l).into_par_iter().map(|i| {
+                        (i..shifted_indices.len())
+                            .into_par_iter()
+                            .map(|j| {
+                                self.0.if_then_else_parallelized(
+                                    &self.0.scalar_eq_parallelized(&shifted_indices[j], i as u64),
+                                    fst[j].as_ref(),
+                                    &self.false_ct(),
+                                )
+                            })
+                            .reduce(
+                                || self.false_ct(),
+                                |a, b| self.0.bitxor_parallelized(&a, &b),
+                            )
+                            .into()
+                    }));
                     (starts_with, FheString::new_unchecked_padded(result))
                 }
             }

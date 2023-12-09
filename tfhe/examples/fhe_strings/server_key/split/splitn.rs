@@ -65,6 +65,7 @@ impl ServerKey {
         n: N,
         pat: P,
     ) -> FheSplitResult {
+        let str_real_len = self.len(encrypted_str);
         let enc_str = self.pad_string(encrypted_str); // TODO: is it necessary?
 
         let str_ref = enc_str.as_ref();
@@ -72,19 +73,28 @@ impl ServerKey {
         match (pat.into(), n.into()) {
             (_, Number::Clear(0)) => FheSplitResult::SplitN(
                 Some(self.true_ct()),
-                FhePatternLen::Plain(0),
+                (
+                    FhePatternLen::Plain(0),
+                    FhePatternLen::Encrypted(str_real_len),
+                ),
                 Default::default(),
             ),
             (Pattern::Clear(p), Number::Clear(_count)) if p.len() > str_ref.len() => {
                 FheSplitResult::SplitN(
                     None,
-                    FhePatternLen::Plain(p.len()),
+                    (
+                        FhePatternLen::Plain(p.len()),
+                        FhePatternLen::Encrypted(str_real_len),
+                    ),
                     self.larger_clear_pattern_split(str_ref),
                 )
             }
             (Pattern::Clear(p), Number::Clear(count)) if p.is_empty() => FheSplitResult::SplitN(
                 None,
-                FhePatternLen::Plain(0),
+                (
+                    FhePatternLen::Plain(0),
+                    FhePatternLen::Encrypted(str_real_len),
+                ),
                 self.empty_clear_pattern_split(str_ref, true, Some(count)),
             ),
 
@@ -95,59 +105,46 @@ impl ServerKey {
                     _ => None,
                 };
                 let mut split_sequence = SplitFoundPattern::new();
-                let empty_input = self.is_empty(encrypted_str);
-                if pat.is_empty() {
-                    match &max_count {
-                        Number::Encrypted(mc) => {
-                            let not_single_match = self.0.scalar_ne_parallelized(mc, 1u64);
 
-                            split_sequence.push_back((
-                                self.0.bitor_parallelized(&not_single_match, &empty_input),
-                                zero.clone().into(),
-                            ));
-                            split_sequence.push_back((
-                                self.0.bitand_parallelized(&not_single_match, &empty_input),
-                                zero.clone().into(),
-                            ));
-                        }
-                        _ => split_sequence.push_back((self.true_ct(), zero.clone().into())),
-                    };
-                }
-                let adjust_max_count = if pat.is_empty() {
-                    match max_count {
-                        Number::Clear(mc) => Number::Clear(mc.saturating_sub(1)),
-                        Number::Encrypted(mc) => {
-                            let reduced_match = self.0.scalar_sub_parallelized(&mc, 1u64);
-                            Number::Encrypted(self.0.if_then_else_parallelized(
-                                &empty_input,
-                                &self.false_ct(),
-                                &reduced_match,
-                            ))
-                        }
-                    }
-                } else {
-                    max_count
-                };
                 let accumulated_starts = self
-                    .clear_accumulated_starts(str_len, str_ref, pat, Some(&adjust_max_count))
+                    .clear_accumulated_starts(str_len, str_ref, pat, Some(&max_count))
                     .filter_map(|x| {
                         x.map(|(count, starts_y)| {
                             let (starts, (in_pattern, le_maxcount)) = rayon::join(
                                 || self.0.scalar_eq_parallelized(&starts_y, pat.len() as u64),
-                                || {
-                                    self.check_in_pattern_max_count(
-                                        &adjust_max_count,
-                                        count,
-                                        &starts_y,
-                                    )
-                                },
+                                || self.check_in_pattern_max_count(&max_count, count, &starts_y),
                             );
                             self.check_le_max_count(starts, in_pattern, le_maxcount)
                         })
                     })
                     .collect::<Vec<_>>();
                 split_sequence.par_extend(self.split_compute(accumulated_starts, str_ref, &zero));
-                FheSplitResult::SplitN(zero_count, FhePatternLen::Plain(pat.len()), split_sequence)
+
+                if pat.is_empty() {
+                    let empty_input = self.is_empty(encrypted_str);
+                    match &max_count {
+                        Number::Encrypted(mc) => {
+                            let not_single_match = self.0.scalar_ge_parallelized(mc, 1u64);
+
+                            split_sequence.push_back((
+                                self.0.bitand_parallelized(&not_single_match, &empty_input),
+                                zero.clone().into(),
+                            ));
+                        }
+                        Number::Clear(n) if *n >= 1 => {
+                            split_sequence.push_back((empty_input.clone(), zero.clone().into()))
+                        }
+                        _ => {}
+                    };
+                }
+                FheSplitResult::SplitN(
+                    zero_count,
+                    (
+                        FhePatternLen::Plain(pat.len()),
+                        FhePatternLen::Encrypted(str_real_len),
+                    ),
+                    split_sequence,
+                )
             }
             (Pattern::Encrypted(p), count) => {
                 let pat = self.pad_string(p); // TODO: unpadded version
@@ -157,10 +154,13 @@ impl ServerKey {
                     _ => None,
                 };
                 let (orig_len, split_sequence) =
-                    self.encrypted_split(str_len, str_ref, &pat, Some(count));
+                    self.encrypted_split(str_len, str_ref, &pat, Some(count), true);
                 FheSplitResult::SplitN(
                     zero_count,
-                    FhePatternLen::Encrypted(orig_len),
+                    (
+                        FhePatternLen::Encrypted(orig_len),
+                        FhePatternLen::Encrypted(str_real_len),
+                    ),
                     split_sequence,
                 )
             }

@@ -51,7 +51,7 @@ impl ServerKey {
             (x, y) => {
                 let px = self.pad_string(x);
                 let py = self.pad_string(y);
-                self.ge(&px, &py)
+                self.ne(&px, &py)
             }
         }
     }

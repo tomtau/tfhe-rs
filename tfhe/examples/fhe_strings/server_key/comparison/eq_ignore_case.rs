@@ -46,6 +46,9 @@ impl ServerKey {
                     ),
                 }
             }
+            (FheString::Unpadded(x), FheString::Unpadded(y)) if x.is_empty() && y.is_empty() => {
+                self.true_ct()
+            }
             (FheString::Unpadded(_), FheString::Unpadded(_)) => {
                 let fst = encrypted_str.as_ref();
                 let snd = other_encrypted_str.as_ref();

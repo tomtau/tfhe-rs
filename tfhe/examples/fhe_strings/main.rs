@@ -91,17 +91,21 @@ fn main() -> io::Result<()> {
     ) {
         let input_string_pading = matches
             .get_one::<usize>("input_string_padding")
-            .map(|s| s.to_owned());
-        let pattern_padding = matches
-            .get_one::<usize>("pattern_padding")
-            .map(|s| s.to_owned());
+            .and_then(|s| if *s == 0 { None } else { Some(*s) });
+        let pattern_padding = matches.get_one::<usize>("pattern_padding").and_then(|s| {
+            if *s == 0 {
+                None
+            } else {
+                Some(*s)
+            }
+        });
         let input_string2 = matches
             .get_one::<String>("input_string2")
             .map(|s| s.to_owned())
             .unwrap_or_default();
         let input_string2_padding = matches
             .get_one::<usize>("input_string2_padding")
-            .map(|s| s.to_owned());
+            .and_then(|s| if *s == 0 { None } else { Some(*s) });
         let n = matches.get_one::<usize>("number").copied().unwrap_or(2);
         let skip_n = matches
             .get_one::<bool>("skip_encrypted_number")
@@ -188,8 +192,8 @@ fn main() -> io::Result<()> {
         let elapsed = now.elapsed();
         let decrypted_ends_with_encrypted = client_key.decrypt_bool(&contains);
         info!(
-            "`ends_with` FHE: {decrypted_ends_with_encrypted} (took {elapsed:?}) (encrypted pattern)"
-        );
+                   "`ends_with` FHE: {decrypted_ends_with_encrypted} (took {elapsed:?}) (encrypted pattern)"
+               );
         info!(
             "`ends_with` std: {}",
             input_string.ends_with(pattern.as_str())
@@ -288,8 +292,8 @@ fn main() -> io::Result<()> {
         let elapsed = now.elapsed();
         let decrypted_replacen_encrypted_clear = client_key.decrypt_str(&replacen_encrypted_clear);
         info!(
-                    "`replacen` FHE: {decrypted_replacen_encrypted_clear} (took {elapsed:?}) (encrypted pattern, clear number)"
-                );
+                           "`replacen` FHE: {decrypted_replacen_encrypted_clear} (took {elapsed:?}) (encrypted pattern, clear number)"
+                       );
         let now = Instant::now();
         let replacen_encrypted_encrypted = server_key.replacen(
             &encrypted_str,
@@ -301,8 +305,8 @@ fn main() -> io::Result<()> {
         let decrypted_replacen_encrypted_encrypted =
             client_key.decrypt_str(&replacen_encrypted_encrypted);
         info!(
-                    "`replacen` FHE: {decrypted_replacen_encrypted_encrypted} (took {elapsed:?}) (encrypted pattern, encrypted number)"
-                );
+                           "`replacen` FHE: {decrypted_replacen_encrypted_encrypted} (took {elapsed:?}) (encrypted pattern, encrypted number)"
+                       );
         info!(
             "`replacen` std: {}",
             input_string.replacen(pattern, input_string2.as_str(), n)

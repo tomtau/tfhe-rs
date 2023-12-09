@@ -73,49 +73,104 @@ impl ClientKey {
         if zero_count {
             return vec![];
         }
-        let include_empty = split.include_empty_matches().map(|x| match x {
+        let include_empty_prefix = split.include_empty_prefix().map(|x| match &x {
             FhePatternLen::Plain(y) => *y,
             FhePatternLen::Encrypted(y) => self.decrypt_usize(y),
         });
-        let reverse_result = split.reverse_results();
+        let include_empty = split.include_empty_matches().map(|x| match &x.0 {
+            FhePatternLen::Plain(y) => *y,
+            FhePatternLen::Encrypted(y) => self.decrypt_usize(y),
+        });
+        let is_right_match_empty = split.is_right_match_empty();
+        let end_len = split.include_empty_matches().map(|x| match &x.1 {
+            FhePatternLen::Plain(y) => *y,
+            FhePatternLen::Encrypted(y) => self.decrypt_usize(y),
+        });
+        let end_len_match = include_empty.and_then(|orig_len| {
+            let adjust_len = std::cmp::max(orig_len, 1);
+            end_len.map(|x| x.saturating_sub(adjust_len))
+        });
         let skip_terminator = split.skip_empty_terminator();
+
+        if let (Some(pat), Some(end_l)) = (include_empty, end_len) {
+            if pat > end_l {
+                let substr = String::from_iter(split.clone().filter_map(|x| {
+                    let char: u64 = self.0.decrypt_radix(x.1.as_ref());
+                    if char == 0 {
+                        None
+                    } else {
+                        Some(char as u8 as char)
+                    }
+                }));
+                if end_l > 0 || !skip_terminator {
+                    return vec![substr];
+                } else {
+                    return vec![];
+                }
+            }
+        }
+        let reverse_result = split.reverse_results();
         let whitespace_skip = matches!(split, FheSplitResult::SplitAsciiWhitespace(_));
         let mut result = Vec::new();
         let mut current = "".to_string();
         let mut last_found = false;
+
         let mut split_iter = split.into_iter().enumerate();
-        let mut any_non_zero = false;
+
         while let Some((i, (found, char))) = split_iter.next() {
             let char: u64 = self.0.decrypt_radix(char.as_ref());
             let found_dec = self.decrypt_bool(&found);
-            any_non_zero |= char != 0;
-            last_found = found_dec || (char == 0 && last_found);
-
-            if found_dec {
-                if char != 0 {
-                    current.push(char as u8 as char);
-                }
-                if !current.is_empty() || include_empty.is_some() || (i == 0 && !whitespace_skip) {
-                    result.push(current.clone());
-                    current = "".to_string();
-                }
-                if let Some(l) = include_empty {
-                    for _ in 0..l.saturating_sub(1) {
-                        let _ = split_iter.next();
+            if found_dec && i == 0 && !whitespace_skip {
+                match include_empty_prefix {
+                    Some(l) if l > 0 => {
+                        current.push(char as u8 as char);
+                        for _ in 0..l.saturating_sub(1) {
+                            let (_, (_, char)) = split_iter.next().unwrap();
+                            let char: u64 = self.0.decrypt_radix(char.as_ref());
+                            current.push(char as u8 as char);
+                        }
                     }
+                    _ => {}
                 }
-            } else if char != 0 {
+
+                result.push(current.clone());
+                current = "".to_string();
+            } else if found_dec && i != 0 {
+                match include_empty_prefix {
+                    Some(l) if l > 0 => {
+                        current.push(char as u8 as char);
+                        for _ in 0..l.saturating_sub(1) {
+                            let (_, (_, char)) = split_iter.next().unwrap();
+                            let char: u64 = self.0.decrypt_radix(char.as_ref());
+                            current.push(char as u8 as char);
+                        }
+                    }
+                    _ => {}
+                }
+
+                if !current.is_empty() || !whitespace_skip {
+                    result.push(current.clone());
+                }
+                current = "".to_string();
+                last_found |= found_dec
+                    && (Some(i) == end_len_match
+                        || (Some(i - 1) == end_len_match
+                            && is_right_match_empty
+                            && matches!(include_empty, Some(0))));
+            }
+            if char != 0 && (matches!(include_empty_prefix, None | Some(0)) || !found_dec) {
                 current.push(char as u8 as char);
             }
         }
-        if (((last_found && any_non_zero) || result.is_empty())
-            && matches!(include_empty, Some(l) if l > 0))
-            || !current.is_empty()
+
+        if !current.is_empty()
+            || current.is_empty()
+                && last_found
+                && !skip_terminator
+                && !whitespace_skip
+                && include_empty.is_some()
         {
             result.push(current);
-        }
-        if skip_terminator && result.last().map(|x| x.is_empty()).unwrap_or(false) {
-            result.pop();
         }
         if reverse_result {
             result.reverse();

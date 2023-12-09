@@ -3,7 +3,7 @@ use rayon::iter::{ParallelExtend, ParallelIterator};
 use crate::ciphertext::{FheBool, FheString, FheUsize, Number, Pattern};
 use crate::server_key::ServerKey;
 
-use super::{FhePatternLen, FheSplitResult, SplitFoundPattern};
+use super::{FhePatternLen, FheSplitResult, PatternLenAndEndLen, SplitFoundPattern};
 
 impl ServerKey {
     /// An iterator over possible results of encrypted substrings of `encrypted_str`,
@@ -72,19 +72,26 @@ impl ServerKey {
         encrypted_str: &FheString,
         n: N,
         pat: P,
-    ) -> (Option<FheBool>, FhePatternLen, SplitFoundPattern) {
+    ) -> (Option<FheBool>, PatternLenAndEndLen, SplitFoundPattern) {
         if matches!(encrypted_str, FheString::Padded(_)) {
+            let str_real_len = self.len(encrypted_str);
             let str_ref = encrypted_str.as_ref();
             let str_len = str_ref.len();
             match (pat.into(), n.into()) {
                 (_, Number::Clear(0)) => (
                     Some(self.true_ct()),
-                    FhePatternLen::Plain(0),
+                    (
+                        FhePatternLen::Plain(0),
+                        FhePatternLen::Encrypted(str_real_len),
+                    ),
                     Default::default(),
                 ),
                 (Pattern::Clear(p), Number::Clear(_)) if p.len() > str_ref.len() => (
                     None,
-                    FhePatternLen::Plain(p.len()),
+                    (
+                        FhePatternLen::Plain(p.len()),
+                        FhePatternLen::Encrypted(str_real_len),
+                    ),
                     self.larger_clear_pattern_split(str_ref),
                 ),
                 (Pattern::Clear(p), n) if p.is_empty() => {
@@ -102,6 +109,7 @@ impl ServerKey {
                     let pat_rev: String = pat.chars().rev().collect();
                     let zero = self.false_ct();
                     let mut split_sequence = SplitFoundPattern::new();
+
                     let mut accumulated_starts = self
                         .clear_accumulated_starts(str_len, &rev_str_ref, &pat_rev, Some(&max_count))
                         .filter_map(|x| {
@@ -119,12 +127,20 @@ impl ServerKey {
                         })
                         .collect::<Vec<_>>();
                     accumulated_starts.reverse();
+
                     split_sequence.par_extend(self.split_compute(
                         accumulated_starts,
                         str_ref,
                         &zero,
                     ));
-                    (zero_count, FhePatternLen::Plain(pat.len()), split_sequence)
+                    (
+                        zero_count,
+                        (
+                            FhePatternLen::Plain(pat.len()),
+                            FhePatternLen::Encrypted(str_real_len),
+                        ),
+                        split_sequence,
+                    )
                 }
                 (Pattern::Encrypted(p), count) => {
                     let pat = self.pad_string(p); // TODO: unpadded version
@@ -134,10 +150,13 @@ impl ServerKey {
                         _ => None,
                     };
                     let (orig_len, split_sequence) =
-                        self.encrypted_rsplit(str_len, str_ref, &pat, Some(count));
+                        self.encrypted_rsplit(str_len, str_ref, &pat, Some(count), true);
                     (
                         zero_count,
-                        FhePatternLen::Encrypted(orig_len),
+                        (
+                            FhePatternLen::Encrypted(orig_len),
+                            FhePatternLen::Encrypted(str_real_len),
+                        ),
                         split_sequence,
                     )
                 }

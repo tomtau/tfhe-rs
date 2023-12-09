@@ -88,6 +88,11 @@ impl ServerKey {
             {
                 encrypted_str.clone()
             }
+            (FheString::Unpadded(_), Pattern::Clear(from_pat), _)
+                if from_pat.is_empty() && str_ref.is_empty() =>
+            {
+                encrypted_str.clone()
+            }
             (FheString::Unpadded(_), Pattern::Clear(from_pat), Pattern::Clear(to_pat))
                 if from_pat.is_empty() =>
             {
@@ -103,14 +108,24 @@ impl ServerKey {
             {
                 self.replace_same_len_pat_clear(encrypted_str, from_pat, to_pat, None)
             }
-            (_, Pattern::Clear(from_pat), Pattern::Clear(to_pat)) => {
-                self.replace_diff_len_pat_clear(encrypted_str, from_pat, to_pat, None)
-            }
+            (_, Pattern::Clear(from_pat), Pattern::Clear(to_pat)) => self
+                .replace_diff_len_pat_clear(
+                    &self.pad_string(encrypted_str),
+                    from_pat,
+                    to_pat,
+                    None,
+                ),
             (FheString::Padded(_), Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat)) => {
-                self.replace_pat_encrypted(encrypted_str, from_pat, to_pat, None)
+                self.replace_pat_encrypted(
+                    encrypted_str,
+                    &self.pad_string(from_pat),
+                    &self.pad_string(to_pat),
+                    None,
+                )
             }
             (FheString::Unpadded(_), Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat))
-                if from_pat.as_ref().len() == to_pat.as_ref().len() =>
+                if from_pat.as_ref().len() == to_pat.as_ref().len()
+                    && !from_pat.as_ref().is_empty() =>
             {
                 self.replace_same_len_pat_unpadded_encrypted(str_ref, from_pat, to_pat, None)
             }
@@ -216,7 +231,12 @@ impl ServerKey {
                 self.replace_diff_len_pat_clear(encrypted_str, from_pat, to_pat, Some(n))
             }
             (FheString::Padded(_), Pattern::Encrypted(from_pat), Pattern::Encrypted(to_pat), n) => {
-                self.replace_pat_encrypted(encrypted_str, from_pat, to_pat, Some(n))
+                self.replace_pat_encrypted(
+                    encrypted_str,
+                    &self.pad_string(from_pat),
+                    &self.pad_string(to_pat),
+                    Some(n),
+                )
             }
             (FheString::Unpadded(_), Pattern::Clear(from_pat), _, _)
                 if !from_pat.is_empty() && str_ref.is_empty() =>
@@ -250,7 +270,9 @@ impl ServerKey {
                 Pattern::Encrypted(from_pat),
                 Pattern::Encrypted(to_pat),
                 n,
-            ) if from_pat.as_ref().len() == to_pat.as_ref().len() => {
+            ) if from_pat.as_ref().len() == to_pat.as_ref().len()
+                && !from_pat.as_ref().is_empty() =>
+            {
                 self.replace_same_len_pat_unpadded_encrypted(str_ref, from_pat, to_pat, Some(n))
             }
             // TODO: more effiecient versions for combinations of padded and unpadded
@@ -373,7 +395,7 @@ impl ServerKey {
             Some((max_count.as_ref().map(|_| starts), starts_len))
         });
         let accumulated_starts: Vec<_> =
-            self.accumulate_clear_pat_starts(pattern_starts)
+            self.accumulate_clear_pat_starts(pattern_starts, max_count.as_ref())
                 .flat_map(|x| {
                     x.map(|(count, starts)| {
                         let (basic_cond, extra_cond) = rayon::join(
@@ -444,7 +466,7 @@ impl ServerKey {
             Some((max_count.as_ref().map(|_| starts), starts_len))
         });
         let accumulated_starts: Vec<_> =
-            self.accumulate_clear_pat_starts(pattern_starts)
+            self.accumulate_clear_pat_starts(pattern_starts, max_count.as_ref())
                 .flat_map(|x| {
                     x.map(|(count, starts)| {
                         let (basic_cond, extra_cond) = rayon::join(
@@ -713,8 +735,11 @@ impl ServerKey {
                     || self.0.scalar_le_parallelized(&count_xy, *count as u64),
                 );
                 count_xy = min_next_count;
-                self.0
-                    .bitand_assign_parallelized(&mut start_y, &not_reached_max_count);
+                start_y = self.0.if_then_else_parallelized(
+                    &not_reached_max_count,
+                    &start_y,
+                    &self.false_ct(),
+                );
             }
             Some(Number::Encrypted(count)) => {
                 let (min_next_count, not_reached_max_count) = rayon::join(
@@ -722,9 +747,11 @@ impl ServerKey {
                     || self.0.le_parallelized(&count_xy, count),
                 );
                 count_xy = min_next_count;
-
-                self.0
-                    .bitand_assign_parallelized(&mut start_y, &not_reached_max_count);
+                start_y = self.0.if_then_else_parallelized(
+                    &not_reached_max_count,
+                    &start_y,
+                    &self.false_ct(),
+                );
             }
             _ => {}
         }

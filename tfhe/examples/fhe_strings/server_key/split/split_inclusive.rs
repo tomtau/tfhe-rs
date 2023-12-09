@@ -6,7 +6,7 @@ use crate::ciphertext::{FheString, Pattern};
 use crate::scan::scan;
 use crate::server_key::ServerKey;
 
-use super::{FheSplitResult, SplitFoundPattern};
+use super::{FhePatternLen, FheSplitResult, SplitFoundPattern};
 
 impl ServerKey {
     /// An iterator over possible results of encrypted substrings of `encrypted_str`,
@@ -61,18 +61,23 @@ impl ServerKey {
         let str_ref = enc_str.as_ref();
         let str_len = str_ref.len();
         match pat.into() {
-            Pattern::Clear(p) if p.is_empty() => {
-                FheSplitResult::SplitInclusive(self.empty_clear_pattern_split(str_ref, false, None))
-            }
-            Pattern::Clear(p) if p.len() > str_ref.len() => {
-                FheSplitResult::SplitInclusive(self.larger_clear_pattern_split(str_ref))
-            }
+            Pattern::Clear(p) if p.is_empty() => FheSplitResult::SplitInclusive(
+                FhePatternLen::Plain(0),
+                self.empty_clear_pattern_split(str_ref, false, None),
+            ),
+            Pattern::Clear(p) if p.len() > str_ref.len() => FheSplitResult::SplitInclusive(
+                FhePatternLen::Plain(p.len()),
+                self.larger_clear_pattern_split(str_ref),
+            ),
             Pattern::Clear(pat) => {
                 let accumulated_starts = self
                     .clear_accumulated_starts(str_len, str_ref, pat, None)
-                    .filter_map(|x| x.map(|(_, y)| self.0.scalar_eq_parallelized(&y, 1)))
+                    .filter_map(|x| {
+                        x.map(|(_, y)| self.0.scalar_eq_parallelized(&y, pat.len() as u64))
+                    })
                     .collect::<Vec<_>>();
                 FheSplitResult::SplitInclusive(
+                    FhePatternLen::Plain(pat.len()),
                     accumulated_starts
                         .into_par_iter()
                         .zip(str_ref.into_par_iter().cloned())
@@ -81,42 +86,47 @@ impl ServerKey {
             }
             Pattern::Encrypted(p) => {
                 let pat = self.pad_string(p); // TODO: unpadded version
-                let zero = self.false_ct();
                 let is_empty = self.is_empty(&pat);
                 let mut split_sequence = SplitFoundPattern::new();
-                split_sequence.push_back((is_empty.clone(), zero.into()));
                 let pat_ref = pat.as_ref();
-                let pat_len = self.0.max_parallelized(&self.len(&pat), &is_empty);
+                let orig_len = self.len(&pat);
+                let pat_len = self.0.max_parallelized(&orig_len, &is_empty);
                 let pattern_starts = (0..str_len).into_par_iter().map(|i| {
                     let starts = self.starts_with_encrypted_par(&str_ref[i..], pat_ref);
-                    Some(self.0.mul_parallelized(&starts, &pat_len))
+                    let not_ended = self.0.scalar_ne_parallelized(str_ref[i].as_ref(), 0);
+                    Some((self.0.mul_parallelized(&starts, &pat_len), not_ended))
                 });
 
                 let accumulated_starts: Vec<_> = scan(
                     pattern_starts,
                     |x, y| match (x, y) {
-                        (Some(start_x), Some(start_y)) => {
+                        (Some((start_x, _not_ended_x)), Some((start_y, not_ended_y))) => {
                             let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
+                            let next_start_y = self.0.if_then_else_parallelized(
+                                not_ended_y,
+                                start_y,
+                                &self.false_ct(),
+                            );
                             let next_start = self.0.if_then_else_parallelized(
                                 &in_pattern,
                                 &self.0.scalar_sub_parallelized(start_x, 1),
-                                start_y,
+                                &next_start_y,
                             );
-                            Some(next_start)
+                            Some((next_start, not_ended_y.clone()))
                         }
                         (None, y) => y.clone(),
                         (x, None) => x.clone(),
                     },
                     None,
                 )
-                .filter_map(|x| x.map(|y| self.0.scalar_eq_parallelized(&y, 1)))
+                .filter_map(|x| x.map(|y| self.0.eq_parallelized(&y.0, &pat_len)))
                 .collect();
                 split_sequence.par_extend(
                     accumulated_starts
                         .into_par_iter()
                         .zip(str_ref.into_par_iter().cloned()),
                 );
-                FheSplitResult::SplitInclusive(split_sequence)
+                FheSplitResult::SplitInclusive(FhePatternLen::Encrypted(orig_len), split_sequence)
             }
         }
     }
@@ -141,6 +151,9 @@ mod test {
         ("010", "0"),
         ("rust", ""),
         ("    a  b c", " "),
+        ("1111111", "11"),
+        ("123123123", "123"),
+        ("12121212121", "1212"),
         ("banana", "ana"),
         ("foo:bar", "foo:"),
         ("foo:bar", "bar"),],

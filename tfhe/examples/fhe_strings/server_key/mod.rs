@@ -16,7 +16,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tfhe::integer::ServerKey as IntegerServerKey;
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number};
 use crate::client_key::{ClientKey, PRECISION_BITS};
 use crate::scan::scan;
 
@@ -194,6 +194,27 @@ impl ServerKey {
     fn starts_with_encrypted_par(&self, enc_ref: &[FheAsciiChar], pat: &[FheAsciiChar]) -> FheBool {
         if pat.as_ref().len() < 2 {
             self.true_ct()
+        } else if enc_ref.len() < pat.len() {
+            enc_ref
+                .to_vec()
+                .into_par_iter()
+                .chain(rayon::iter::repeatn(
+                    self.false_ct().into(),
+                    pat.len() - enc_ref.len(),
+                ))
+                .zip(pat.as_ref().par_iter())
+                .map(|(a, b)| {
+                    let (pattern_ended, a_eq_b) = rayon::join(
+                        || self.0.scalar_eq_parallelized(b.as_ref(), 0),
+                        || self.0.eq_parallelized(a.as_ref(), b.as_ref()),
+                    );
+                    Some(
+                        self.0
+                            .if_then_else_parallelized(&pattern_ended, &self.true_ct(), &a_eq_b),
+                    )
+                })
+                .reduce(|| None, |s, x| self.and_true(s.as_ref(), x.as_ref()))
+                .unwrap_or_else(|| self.false_ct())
         } else {
             enc_ref
                 .par_iter()
@@ -317,22 +338,63 @@ impl ServerKey {
     /// pattern, 1 for the end; and anything above 1 for the pattern)
     #[inline]
     fn accumulate_clear_pat_starts<
+        'a,
         M: ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>>,
     >(
-        &self,
+        &'a self,
         pattern_starts: M,
-    ) -> impl ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>> + '_ {
+        max_count: Option<&'a Number>,
+    ) -> impl ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>> + 'a {
         scan(
             pattern_starts,
-            |x, y| match (x, y) {
+            move |x, y| match (x, y) {
                 (Some((count_x, start_x)), Some((count_y, start_y))) => {
+                    let mut count_xy = self.add(count_x.as_ref(), count_y.as_ref());
                     let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
+                    let mut start_y = start_y.clone();
+                    match (max_count.as_ref(), count_xy.as_ref()) {
+                        (Some(Number::Clear(count)), Some(c_xy)) => {
+                            let (min_next_count, not_reached_max_count) = rayon::join(
+                                || self.0.scalar_min_parallelized(c_xy, *count as u64),
+                                || self.0.scalar_le_parallelized(c_xy, *count as u64),
+                            );
+                            count_xy = Some(min_next_count);
+                            start_y = self.0.if_then_else_parallelized(
+                                &not_reached_max_count,
+                                &start_y,
+                                &self.false_ct(),
+                            );
+                        }
+                        (Some(Number::Encrypted(count)), Some(c_xy)) => {
+                            let (min_next_count, not_reached_max_count) = rayon::join(
+                                || self.0.min_parallelized(c_xy, count),
+                                || self.0.le_parallelized(c_xy, count),
+                            );
+                            count_xy = Some(min_next_count);
+
+                            start_y = self.0.if_then_else_parallelized(
+                                &not_reached_max_count,
+                                &start_y,
+                                &self.false_ct(),
+                            );
+                        }
+                        _ => {}
+                    }
+                    let next_count = if let (Some(count_x), Some(count_xy)) = (count_x, count_xy) {
+                        Some(
+                            self.0
+                                .if_then_else_parallelized(&in_pattern, count_x, &count_xy),
+                        )
+                    } else {
+                        None
+                    };
+
                     let next_start = self.0.if_then_else_parallelized(
                         &in_pattern,
                         &self.0.scalar_sub_parallelized(start_x, 1),
-                        start_y,
+                        &start_y,
                     );
-                    Some((self.add(count_x.as_ref(), count_y.as_ref()), next_start))
+                    Some((next_count, next_start))
                 }
                 (None, y) => y.clone(),
                 (x, None) => x.clone(),
