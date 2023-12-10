@@ -49,6 +49,18 @@ else
 		COVERAGE_ONLY=
 endif
 
+# Variables used only for fhe_strings example
+FHE_STRINGS_TEST?=''
+FHE_STRINGS_INPUT_STRING?=''
+FHE_STRINGS_INPUT_STRING_PADDING?=0
+FHE_STRINGS_INPUT_PATTERN?=''
+FHE_STRINGS_INPUT_PATTERN_PADDING?=0
+FHE_STRINGS_INPUT_STRING2?=''
+FHE_STRINGS_INPUT_STRING2_PADDING?=0
+FHE_STRINGS_INPUT_NUMBER?=2
+FHE_STRINGS_SKIP_REPEAT_ENCRYPTED_NUMBER?='true'
+FHE_STRINGS_FUNCTION?=''
+
 # Variables used only for regex_engine example
 REGEX_STRING?=''
 REGEX_PATTERN?=''
@@ -693,14 +705,19 @@ fhe_strings: install_rs_check_toolchain
 	RUSTFLAGS="$(RUSTFLAGS)" cargo $(CARGO_RS_CHECK_TOOLCHAIN) run --profile $(CARGO_PROFILE) \
 	--example fhe_strings \
 	--features=$(TARGET_ARCH_FEATURE),integer \
-	-- -i $(INPUT_STRING) -p $(INPUT_PATTERN)
+	-- -i $(FHE_STRINGS_INPUT_STRING) -I $(FHE_STRINGS_INPUT_STRING_PADDING) \
+	-p $(FHE_STRINGS_INPUT_PATTERN) -P $(FHE_STRINGS_INPUT_PATTERN_PADDING) \
+	-s $(FHE_STRINGS_INPUT_STRING2) -S $(FHE_STRINGS_INPUT_STRING2_PADDING) \
+	-n $(FHE_STRINGS_INPUT_NUMBER) \
+	-e $(FHE_STRINGS_SKIP_REPEAT_ENCRYPTED_NUMBER) \
+	-f $(FHE_STRINGS_FUNCTION)
 
-# (NOTE: this may exhaust CPU time budget on a laptop OS scheduler, use `fhe_strings_test_per_mod` instead)
+# (NOTE: if passed without a test filter, this may exhaust CPU time budget on a laptop OS scheduler, use `fhe_strings_test_per_mod` instead)
 PHONY: fhe_strings_test # Run fhe_strings tests
 fhe_strings_test: install_rs_check_toolchain
 	RUSTFLAGS="$(RUSTFLAGS)" cargo $(CARGO_RS_CHECK_TOOLCHAIN) test --profile $(CARGO_PROFILE) \
 	--example fhe_strings \
-	--features=$(TARGET_ARCH_FEATURE),integer
+	--features=$(TARGET_ARCH_FEATURE),integer -- $(FHE_STRINGS_TEST)
 
 PHONY: fhe_strings_test_per_mod # Run fhe_strings tests in several runs, filtering out by module
 fhe_strings_test_per_mod: install_rs_check_toolchain

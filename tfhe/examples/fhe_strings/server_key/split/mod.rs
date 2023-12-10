@@ -82,6 +82,8 @@ impl FheSplitResult {
         )
     }
 
+    /// Indicates whether the decryption should consider the empty pattern
+    /// matching from the right
     pub fn is_right_match_empty(&self) -> bool {
         matches!(
             self,
@@ -125,6 +127,8 @@ impl FheSplitResult {
         }
     }
 
+    /// If the split option is inclusive, it needs to know whether the prefix before the first match
+    /// is empty of if it was matched on an empty pattern.
     pub fn include_empty_prefix(&self) -> Option<&FhePatternLen> {
         match self {
             FheSplitResult::SplitInclusive(p, _) => Some(p),
@@ -282,6 +286,9 @@ impl ServerKey {
     /// Use [`split_ascii_whitespace`] for this behavior.
     ///
     /// [`split_ascii_whitespace`]: ServerKey::split_ascii_whitespace
+    /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
+    /// API not fully fleshed out and ready to be stabilized
+    /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[inline]
     pub fn split<'a, P: Into<Pattern<'a>>>(
         &self,

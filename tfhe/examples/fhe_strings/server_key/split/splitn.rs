@@ -58,6 +58,9 @@ impl ServerKey {
     ///   client_key.decrypt_split(server_key.split(s, 1, "X")),
     ///   vec![""]
     /// );
+    /// TODO: `use std::str::pattern::Pattern;` use of unstable library feature 'pattern':
+    /// API not fully fleshed out and ready to be stabilized
+    /// see issue #27721 <https://github.com/rust-lang/rust/issues/27721> for more information
     #[inline]
     pub fn splitn<'a, N: Into<Number>, P: Into<Pattern<'a>>>(
         &self,

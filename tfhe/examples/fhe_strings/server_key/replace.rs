@@ -308,7 +308,6 @@ impl ServerKey {
         let mut result = Vec::with_capacity(str_ref.len() * to_pat.len());
         result.par_extend(to_pat_enc.clone());
         let mut count = 1;
-        // TODO: zero-out after the string end
         for c in str_ref.iter() {
             result.push(c.clone());
             match max_count {
@@ -322,12 +321,7 @@ impl ServerKey {
                 _ => {}
             }
         }
-        if max_count.is_some() {
-            result.push(self.false_ct().into());
-            FheString::new_unchecked_padded(result)
-        } else {
-            FheString::new_unchecked_unpadded(result)
-        }
+        FheString::new_unchecked_unpadded(result)
     }
 
     /// A helper that intersperses `to_pat` between each character in `str_ref`
@@ -347,20 +341,38 @@ impl ServerKey {
         });
         let mut result = Vec::with_capacity(str_ref.len() * to_pat.len());
         result.par_extend(to_pat_enc.clone());
-        let mut count = 1;
-        // TODO: zero-out after the string end
-        for c in str_ref[..str_ref.len() - 1].iter() {
-            result.push(c.clone());
-            match max_count {
-                Some(c) if count < c => {
-                    result.par_extend(to_pat_enc.clone());
-                    count += 1
-                }
-                None => {
-                    result.par_extend(to_pat_enc.clone());
-                }
-                _ => {}
-            }
+        // we could have just interspersed if we didn't have to pad
+        // (possible to return a "broken" / incorrectly padded string here, i.e. string with
+        // potentially zeroes inbetween)
+        if let Some(mc) = max_count {
+            result.par_extend(
+                str_ref[..str_ref.len() - 1]
+                    .par_iter()
+                    .enumerate()
+                    .flat_map(|(i, c)| {
+                        let ended = self.0.scalar_eq_parallelized(c.as_ref(), 0);
+                        let mut substr = vec![c.clone()];
+                        if i <= mc {
+                            substr.par_extend(to_pat_enc.clone().map(move |x: FheAsciiChar| {
+                                self.0
+                                    .if_then_else_parallelized(&ended, &self.false_ct(), x.as_ref())
+                                    .into()
+                            }));
+                        }
+                        substr
+                    }),
+            );
+        } else {
+            result.par_extend(str_ref[..str_ref.len() - 1].par_iter().flat_map(|c| {
+                let ended = self.0.scalar_eq_parallelized(c.as_ref(), 0);
+                let mut substr = vec![c.clone()];
+                substr.par_extend(to_pat_enc.clone().map(move |x: FheAsciiChar| {
+                    self.0
+                        .if_then_else_parallelized(&ended, &self.false_ct(), x.as_ref())
+                        .into()
+                }));
+                substr
+            }));
         }
         result.push(str_ref[str_ref.len() - 1].clone());
         FheString::new_unchecked_padded(result)
