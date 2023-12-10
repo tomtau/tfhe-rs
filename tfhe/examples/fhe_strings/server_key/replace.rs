@@ -88,11 +88,6 @@ impl ServerKey {
             {
                 encrypted_str.clone()
             }
-            (FheString::Unpadded(_), Pattern::Clear(from_pat), _)
-                if from_pat.is_empty() && str_ref.is_empty() =>
-            {
-                encrypted_str.clone()
-            }
             (FheString::Unpadded(_), Pattern::Clear(from_pat), Pattern::Clear(to_pat))
                 if from_pat.is_empty() =>
             {
