@@ -1,4 +1,4 @@
-use rayon::iter::{ParallelExtend, ParallelIterator};
+use rayon::prelude::*;
 
 use crate::ciphertext::{FheString, Number, Pattern};
 use crate::server_key::ServerKey;
@@ -105,13 +105,25 @@ impl ServerKey {
                     _ => None,
                 };
                 let mut split_sequence = SplitFoundPattern::new();
-
-                let accumulated_starts = self
+                let not_empty_ref = self.0.scalar_ne_parallelized(str_ref[0].as_ref(), 0);
+                let orig_starts = self
                     .clear_accumulated_starts(str_len, str_ref, pat, Some(&max_count))
-                    .filter_map(|x| {
+                    .collect::<Vec<_>>();
+                let accumulated_starts = orig_starts
+                    .into_par_iter()
+                    .enumerate()
+                    .filter_map(|(i, x)| {
                         x.map(|(count, starts_y)| {
                             let (starts, (in_pattern, le_maxcount)) = rayon::join(
-                                || self.0.scalar_eq_parallelized(&starts_y, pat.len() as u64),
+                                || {
+                                    let starts =
+                                        self.0.scalar_eq_parallelized(&starts_y, pat.len() as u64);
+                                    if i != 0 && pat.is_empty() {
+                                        self.0.bitand_parallelized(&not_empty_ref, &starts)
+                                    } else {
+                                        starts
+                                    }
+                                },
                                 || self.check_in_pattern_max_count(&max_count, count, &starts_y),
                             );
                             self.check_le_max_count(starts, in_pattern, le_maxcount)
