@@ -350,9 +350,9 @@ impl ServerKey {
                     .par_iter()
                     .enumerate()
                     .flat_map(|(i, c)| {
-                        let ended = self.0.scalar_eq_parallelized(c.as_ref(), 0);
                         let mut substr = vec![c.clone()];
-                        if i <= mc {
+                        if i + 1 < mc {
+                            let ended = self.0.scalar_eq_parallelized(c.as_ref(), 0);
                             substr.par_extend(to_pat_enc.clone().map(move |x: FheAsciiChar| {
                                 self.0
                                     .if_then_else_parallelized(&ended, &self.false_ct(), x.as_ref())
