@@ -11,6 +11,7 @@ use env_logger::Env;
 use log::{error, info};
 use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
+/// See README.md for details on how to run this example or its tests.
 fn main() -> io::Result<()> {
     let env = Env::default().filter_or("RUST_LOG", "info");
     env_logger::init_from_env(env);

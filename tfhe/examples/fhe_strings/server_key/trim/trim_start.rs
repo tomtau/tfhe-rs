@@ -89,22 +89,11 @@ impl ServerKey {
             .collect();
 
         let mut result = Vec::with_capacity(fst.len());
-        result.par_extend((0..str_l).into_par_iter().map(|i| {
-            (i..shifted_indices.len())
+        result.par_extend(
+            (0..str_l)
                 .into_par_iter()
-                .map(|j| {
-                    self.0.if_then_else_parallelized(
-                        &self.0.scalar_eq_parallelized(&shifted_indices[j], i as u64),
-                        fst[j].as_ref(),
-                        &self.false_ct(),
-                    )
-                })
-                .reduce(
-                    || self.false_ct(),
-                    |a, b| self.0.bitxor_parallelized(&a, &b),
-                )
-                .into()
-        }));
+                .map(|i| self.shift_zero_prefix(fst, &shifted_indices, i)),
+        );
         FheString::new_unchecked_padded(result)
     }
 }

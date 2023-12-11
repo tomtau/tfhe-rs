@@ -3,7 +3,7 @@ use rayon::iter::{
     ParallelIterator,
 };
 
-use crate::ciphertext::{FheOption, FheString, Pattern};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, Pattern};
 use crate::scan::scan;
 use crate::server_key::ServerKey;
 
@@ -132,15 +132,11 @@ impl ServerKey {
                 let suffix_found = self.starts_with_clear_par(&fst[suffix_start..], pat);
                 let zero = self.false_ct();
                 let mut result = Vec::with_capacity(fst.len());
-                result.par_extend(fst.par_iter().enumerate().map(|(i, c)| {
-                    if i < suffix_start {
-                        c.clone()
-                    } else {
-                        self.0
-                            .if_then_else_parallelized(&suffix_found, &zero, c.as_ref())
-                            .into()
-                    }
-                }));
+                result.par_extend(
+                    fst.par_iter().enumerate().map(|(i, c)| {
+                        self.zero_out_suffix(suffix_start, &suffix_found, &zero, i, c)
+                    }),
+                );
                 result.push(zero.into());
                 (suffix_found, FheString::new_unchecked_padded(result))
             }
@@ -158,15 +154,11 @@ impl ServerKey {
                 let suffix_found = self.par_eq(&fst[suffix_start..], snd);
                 let zero = self.false_ct();
                 let mut result = Vec::with_capacity(fst.len());
-                result.par_extend(fst.par_iter().enumerate().map(|(i, c)| {
-                    if i < suffix_start {
-                        c.clone()
-                    } else {
-                        self.0
-                            .if_then_else_parallelized(&suffix_found, &zero, c.as_ref())
-                            .into()
-                    }
-                }));
+                result.par_extend(
+                    fst.par_iter().enumerate().map(|(i, c)| {
+                        self.zero_out_suffix(suffix_start, &suffix_found, &zero, i, c)
+                    }),
+                );
                 result.push(zero.into());
                 (suffix_found, FheString::new_unchecked_padded(result))
             }
@@ -176,6 +168,25 @@ impl ServerKey {
                 let py = self.pad_string(y);
                 self.strip_suffix(&px, &py)
             }
+        }
+    }
+
+    /// A helper that returns a zero if the suffix was found
+    /// or the original character if not
+    fn zero_out_suffix(
+        &self,
+        suffix_start: usize,
+        suffix_found: &FheBool,
+        zero: &FheBool,
+        i: usize,
+        c: &FheAsciiChar,
+    ) -> FheAsciiChar {
+        if i < suffix_start {
+            c.clone()
+        } else {
+            self.0
+                .if_then_else_parallelized(suffix_found, zero, c.as_ref())
+                .into()
         }
     }
 }

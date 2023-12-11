@@ -102,11 +102,11 @@ impl ClientKey {
                         Some(char as u8 as char)
                     }
                 }));
-                if end_l > 0 || !skip_terminator {
-                    return vec![substr];
+                return if end_l > 0 || !skip_terminator {
+                    vec![substr]
                 } else {
-                    return vec![];
-                }
+                    vec![]
+                };
             }
         }
         let reverse_result = split.reverse_results();
@@ -118,35 +118,28 @@ impl ClientKey {
         let mut split_iter = split.into_iter().enumerate();
 
         while let Some((i, (found, char))) = split_iter.next() {
+            let current_ref = &mut current;
+            let split_iter_ref = &mut split_iter;
+            let mut add_pattern = move |c: u64| match include_empty_prefix {
+                Some(l) if l > 0 => {
+                    current_ref.push(c as u8 as char);
+                    for _ in 0..l.saturating_sub(1) {
+                        let (_, (_, char)) = split_iter_ref.next().unwrap();
+                        let char: u64 = self.0.decrypt_radix(char.as_ref());
+                        current_ref.push(char as u8 as char);
+                    }
+                }
+                _ => {}
+            };
             let char: u64 = self.0.decrypt_radix(char.as_ref());
             let found_dec = self.decrypt_bool(&found);
             if found_dec && i == 0 && !whitespace_skip {
-                match include_empty_prefix {
-                    Some(l) if l > 0 => {
-                        current.push(char as u8 as char);
-                        for _ in 0..l.saturating_sub(1) {
-                            let (_, (_, char)) = split_iter.next().unwrap();
-                            let char: u64 = self.0.decrypt_radix(char.as_ref());
-                            current.push(char as u8 as char);
-                        }
-                    }
-                    _ => {}
-                }
+                add_pattern(char);
 
                 result.push(current.clone());
                 current = "".to_string();
             } else if found_dec && i != 0 {
-                match include_empty_prefix {
-                    Some(l) if l > 0 => {
-                        current.push(char as u8 as char);
-                        for _ in 0..l.saturating_sub(1) {
-                            let (_, (_, char)) = split_iter.next().unwrap();
-                            let char: u64 = self.0.decrypt_radix(char.as_ref());
-                            current.push(char as u8 as char);
-                        }
-                    }
-                    _ => {}
-                }
+                add_pattern(char);
 
                 if !current.is_empty() || !whitespace_skip {
                     result.push(current.clone());

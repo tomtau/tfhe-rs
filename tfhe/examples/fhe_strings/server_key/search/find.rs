@@ -100,23 +100,15 @@ impl ServerKey {
                     return (self.true_ct(), self.false_ct());
                 }
                 let fst = encrypted_str.as_ref();
-                fst.par_windows(snd.len())
-                    .enumerate()
-                    .map(|(i, window)| {
-                        (
-                            self.par_eq(window, snd),
-                            self.0.create_trivial_radix(i as u64, self.1),
+                self.unpadded_window_equals(snd, fst).reduce(
+                    || (self.false_ct(), self.false_ct()),
+                    |(x_starts, x_i), (y_starts, y_i)| {
+                        rayon::join(
+                            || self.0.bitor_parallelized(&x_starts, &y_starts),
+                            || self.0.if_then_else_parallelized(&x_starts, &x_i, &y_i),
                         )
-                    })
-                    .reduce(
-                        || (self.false_ct(), self.false_ct()),
-                        |(x_starts, x_i), (y_starts, y_i)| {
-                            rayon::join(
-                                || self.0.bitor_parallelized(&x_starts, &y_starts),
-                                || self.0.if_then_else_parallelized(&x_starts, &x_i, &y_i),
-                            )
-                        },
-                    )
+                    },
+                )
             }
             // TODO: more effiecient versions for combinations of padded and unpadded
             (x, Pattern::Encrypted(y)) => {

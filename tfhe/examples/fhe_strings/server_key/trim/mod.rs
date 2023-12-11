@@ -3,8 +3,9 @@ mod strip_suffix;
 mod trim_end;
 mod trim_start;
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheString};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize};
 use dashmap::DashMap;
+use rayon::prelude::*;
 
 use super::ServerKey;
 
@@ -60,6 +61,30 @@ impl ServerKey {
                 v
             });
         (left_whitespace, right_whitspace)
+    }
+
+    /// A helper that returns the correct encrypted character if the prefix pattern / whitespaces
+    /// were removed and the encrypted string needs to be shifted.
+    fn shift_zero_prefix(
+        &self,
+        fst: &[FheAsciiChar],
+        shifted_indices: &[FheUsize],
+        i: usize,
+    ) -> FheAsciiChar {
+        (i..shifted_indices.len())
+            .into_par_iter()
+            .map(|j| {
+                self.0.if_then_else_parallelized(
+                    &self.0.scalar_eq_parallelized(&shifted_indices[j], i as u64),
+                    fst[j].as_ref(),
+                    &self.false_ct(),
+                )
+            })
+            .reduce(
+                || self.false_ct(),
+                |a, b| self.0.bitxor_parallelized(&a, &b),
+            )
+            .into()
     }
 }
 

@@ -14,7 +14,7 @@ pub use split::{FhePatternLen, FheSplitResult};
 use dashmap::DashMap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use tfhe::integer::ServerKey as IntegerServerKey;
+use tfhe::integer::{RadixCiphertext, ServerKey as IntegerServerKey};
 
 use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number};
 use crate::client_key::{ClientKey, PRECISION_BITS};
@@ -203,35 +203,34 @@ impl ServerKey {
                     pat.len() - enc_ref.len(),
                 ))
                 .zip(pat.as_ref().par_iter())
-                .map(|(a, b)| {
-                    let (pattern_ended, a_eq_b) = rayon::join(
-                        || self.0.scalar_eq_parallelized(b.as_ref(), 0),
-                        || self.0.eq_parallelized(a.as_ref(), b.as_ref()),
-                    );
-                    Some(
-                        self.0
-                            .if_then_else_parallelized(&pattern_ended, &self.true_ct(), &a_eq_b),
-                    )
-                })
+                .map(|(a, b)| self.match_padded_pattern_char(&a, b))
                 .reduce(|| None, |s, x| self.and_true(s.as_ref(), x.as_ref()))
                 .unwrap_or_else(|| self.false_ct())
         } else {
             enc_ref
                 .par_iter()
                 .zip(pat.as_ref().par_iter())
-                .map(|(a, b)| {
-                    let (pattern_ended, a_eq_b) = rayon::join(
-                        || self.0.scalar_eq_parallelized(b.as_ref(), 0),
-                        || self.0.eq_parallelized(a.as_ref(), b.as_ref()),
-                    );
-                    Some(
-                        self.0
-                            .if_then_else_parallelized(&pattern_ended, &self.true_ct(), &a_eq_b),
-                    )
-                })
+                .map(|(a, b)| self.match_padded_pattern_char(a, b))
                 .reduce(|| None, |s, x| self.and_true(s.as_ref(), x.as_ref()))
                 .unwrap_or_else(|| self.false_ct())
         }
+    }
+
+    /// A helper that checks that two encrypted characters are a match
+    /// or if the pattern has ended.
+    fn match_padded_pattern_char(
+        &self,
+        a: &FheAsciiChar,
+        b: &FheAsciiChar,
+    ) -> Option<RadixCiphertext> {
+        let (pattern_ended, a_eq_b) = rayon::join(
+            || self.0.scalar_eq_parallelized(b.as_ref(), 0),
+            || self.0.eq_parallelized(a.as_ref(), b.as_ref()),
+        );
+        Some(
+            self.0
+                .if_then_else_parallelized(&pattern_ended, &self.true_ct(), &a_eq_b),
+        )
     }
 
     /// A helper that checks that two encrypted strings are a match

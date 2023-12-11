@@ -79,7 +79,7 @@ impl ServerKey {
         &self,
         encrypted_str: &FheString,
         pat: P,
-        terminator: bool,
+        include_terminal: bool,
     ) -> (PatternLenAndEndLen, SplitFoundPattern) {
         match encrypted_str {
             FheString::Padded(_) => {
@@ -92,7 +92,7 @@ impl ServerKey {
                             FhePatternLen::Plain(0),
                             FhePatternLen::Encrypted(str_real_len),
                         ),
-                        self.empty_clear_pattern_split(str_ref, terminator, None),
+                        self.empty_clear_pattern_split(str_ref, include_terminal, None),
                     ),
                     Pattern::Clear(p) if p.len() > str_ref.len() => (
                         (
@@ -134,7 +134,7 @@ impl ServerKey {
                     }
                     Pattern::Encrypted(pat) => {
                         let (orig_len, split_sequence) =
-                            self.encrypted_rsplit(str_len, str_ref, pat, None, terminator);
+                            self.encrypted_rsplit(str_len, str_ref, pat, None, include_terminal);
                         (
                             (
                                 FhePatternLen::Encrypted(orig_len),
@@ -148,18 +148,25 @@ impl ServerKey {
             FheString::Unpadded(_) => {
                 let str_ref = encrypted_str.as_ref();
                 let one = self.true_ct();
+                fn finalize_terminal(
+                    terminator: bool,
+                    one: &FheBool,
+                    zero: &FheBool,
+                    split_sequence: &mut SplitFoundPattern,
+                ) {
+                    if terminator {
+                        split_sequence.push_back((zero.clone(), zero.clone().into()));
+                        split_sequence.push_back((zero.clone(), zero.clone().into()));
 
+                        split_sequence.push_back((one.clone(), zero.clone().into()));
+                    }
+                }
                 let zero = self.false_ct();
                 match pat.into() {
                     Pattern::Clear(p) if p.is_empty() && str_ref.is_empty() => {
                         let mut split_sequence = VecDeque::new();
                         split_sequence.push_back((one.clone(), zero.clone().into()));
-                        if terminator {
-                            split_sequence.push_back((zero.clone(), zero.clone().into()));
-                            split_sequence.push_back((zero.clone(), zero.clone().into()));
-
-                            split_sequence.push_back((one.clone(), zero.clone().into()));
-                        }
+                        finalize_terminal(include_terminal, &one, &zero, &mut split_sequence);
                         (
                             (
                                 FhePatternLen::Plain(p.len()),
@@ -171,12 +178,7 @@ impl ServerKey {
                     Pattern::Encrypted(p) if p.as_ref().is_empty() && str_ref.is_empty() => {
                         let mut split_sequence = VecDeque::new();
                         split_sequence.push_back((one.clone(), zero.clone().into()));
-                        if terminator {
-                            split_sequence.push_back((zero.clone(), zero.clone().into()));
-                            split_sequence.push_back((zero.clone(), zero.clone().into()));
-
-                            split_sequence.push_back((one.clone(), zero.clone().into()));
-                        }
+                        finalize_terminal(include_terminal, &one, &zero, &mut split_sequence);
                         (
                             (
                                 FhePatternLen::Plain(p.as_ref().len()),
@@ -208,12 +210,12 @@ impl ServerKey {
                     Pattern::Clear(p) => self.rsplit_inner(
                         &self.pad_string(encrypted_str),
                         Pattern::Clear(p),
-                        terminator,
+                        include_terminal,
                     ),
                     Pattern::Encrypted(p) => self.rsplit_inner(
                         &self.pad_string(encrypted_str),
                         &self.pad_string(p),
-                        terminator,
+                        include_terminal,
                     ),
                 }
             }

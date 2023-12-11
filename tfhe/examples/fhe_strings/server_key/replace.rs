@@ -202,7 +202,7 @@ impl ServerKey {
         let str_ref = encrypted_str.as_ref();
         match (encrypted_str, from.into(), to.into(), count.into()) {
             (_, Pattern::Clear(from_pat), Pattern::Clear(to_pat), _)
-                if (from_pat.is_empty() && to_pat.is_empty()) =>
+                if from_pat.is_empty() && to_pat.is_empty() =>
             {
                 encrypted_str.clone()
             }
@@ -293,6 +293,7 @@ impl ServerKey {
         }
     }
 
+    /// A helper that replaces all empty matches with `to` in `str_ref` up to `max_count`.
     #[inline]
     fn replace_empty_from_pat_unpadded_clear(
         &self,
@@ -300,11 +301,7 @@ impl ServerKey {
         to_pat: &str,
         max_count: Option<usize>,
     ) -> FheString {
-        let to_pat_enc = to_pat.as_bytes().par_iter().map(|x| {
-            self.0
-                .create_trivial_radix::<u64, RadixCiphertext>(*x as u64, self.1)
-                .into()
-        });
+        let to_pat_enc = self.encrypt_clear_pattern(to_pat);
         let mut result = Vec::with_capacity(str_ref.len() * to_pat.len());
         result.par_extend(to_pat_enc.clone());
         let mut count = 1;
@@ -324,6 +321,19 @@ impl ServerKey {
         FheString::new_unchecked_unpadded(result)
     }
 
+    /// A helper that encrypts `to_pat` and returns it as a vector of `FheAsciiChar`s.
+    fn encrypt_clear_pattern(&self, to_pat: &str) -> Vec<FheAsciiChar> {
+        to_pat
+            .as_bytes()
+            .par_iter()
+            .map(|x| {
+                self.0
+                    .create_trivial_radix::<u64, RadixCiphertext>(*x as u64, self.1)
+                    .into()
+            })
+            .collect()
+    }
+
     /// A helper that intersperses `to_pat` between each character in `str_ref`
     /// up to `max_count` times.
     /// Assumes that `to_pat` is ASCII.
@@ -334,11 +344,8 @@ impl ServerKey {
         to_pat: &str,
         max_count: Option<usize>,
     ) -> FheString {
-        let to_pat_enc = to_pat.as_bytes().par_iter().map(|x| {
-            self.0
-                .create_trivial_radix::<u64, RadixCiphertext>(*x as u64, self.1)
-                .into()
-        });
+        let zero = self.false_ct();
+        let to_pat_enc = self.encrypt_clear_pattern(to_pat);
         let mut result = Vec::with_capacity(str_ref.len() * to_pat.len());
         result.par_extend(to_pat_enc.clone());
         // we could have just interspersed if we didn't have to pad
@@ -353,11 +360,7 @@ impl ServerKey {
                         let mut substr = vec![c.clone()];
                         if i + 1 < mc {
                             let ended = self.0.scalar_eq_parallelized(c.as_ref(), 0);
-                            substr.par_extend(to_pat_enc.clone().map(move |x: FheAsciiChar| {
-                                self.0
-                                    .if_then_else_parallelized(&ended, &self.false_ct(), x.as_ref())
-                                    .into()
-                            }));
+                            self.add_enc_pattern_or_zeroes(&to_pat_enc, &zero, &mut substr, &ended);
                         }
                         substr
                     }),
@@ -366,16 +369,27 @@ impl ServerKey {
             result.par_extend(str_ref[..str_ref.len() - 1].par_iter().flat_map(|c| {
                 let ended = self.0.scalar_eq_parallelized(c.as_ref(), 0);
                 let mut substr = vec![c.clone()];
-                substr.par_extend(to_pat_enc.clone().map(move |x: FheAsciiChar| {
-                    self.0
-                        .if_then_else_parallelized(&ended, &self.false_ct(), x.as_ref())
-                        .into()
-                }));
+                self.add_enc_pattern_or_zeroes(&to_pat_enc, &zero, &mut substr, &ended);
                 substr
             }));
         }
         result.push(str_ref[str_ref.len() - 1].clone());
         FheString::new_unchecked_padded(result)
+    }
+
+    /// A helper that adds an encrypted pattern or zeroes (if end of the string was reached)
+    fn add_enc_pattern_or_zeroes(
+        &self,
+        to_pat_enc: &[FheAsciiChar],
+        zero: &FheUsize,
+        substr: &mut Vec<FheAsciiChar>,
+        ended: &FheBool,
+    ) {
+        substr.par_extend(to_pat_enc.par_iter().map(move |x: &FheAsciiChar| {
+            self.0
+                .if_then_else_parallelized(ended, zero, x.as_ref())
+                .into()
+        }))
     }
 
     /// A helper that replaces each occurence of `from_pat` with `to_pat` in
@@ -401,39 +415,12 @@ impl ServerKey {
                 .scalar_mul_parallelized(&starts, from_pat.len() as u64);
             Some((max_count.as_ref().map(|_| starts), starts_len))
         });
-        let accumulated_starts: Vec<_> =
-            self.accumulate_clear_pat_starts(pattern_starts, max_count.as_ref())
-                .flat_map(|x| {
-                    x.map(|(count, starts)| {
-                        let (basic_cond, extra_cond) = rayon::join(
-                            || {
-                                self.0
-                                    .scalar_eq_parallelized(&starts, from_pat.len() as u64)
-                            },
-                            || match (count, max_count.as_ref()) {
-                                (Some(count), Some(Number::Clear(mc))) => {
-                                    Some(self.0.scalar_le_parallelized(&count, *mc as u64))
-                                }
-                                (Some(count), Some(Number::Encrypted(mc))) => {
-                                    let count_not_reached = self.0.le_parallelized(&count, mc);
-                                    let max_count_gt_zero =
-                                        self.0.scalar_gt_parallelized(mc, 0_u64);
-                                    Some(self.0.bitand_parallelized(
-                                        &count_not_reached,
-                                        &max_count_gt_zero,
-                                    ))
-                                }
-                                _ => None,
-                            },
-                        );
-                        if let Some(cond) = extra_cond {
-                            self.0.bitand_parallelized(&basic_cond, &cond)
-                        } else {
-                            basic_cond
-                        }
-                    })
-                })
-                .collect();
+        let accumulated_starts: Vec<_> = self.accumulate_clear_pat_stars_with_count(
+            max_count.as_ref(),
+            from_pat.len(),
+            pattern_starts,
+        );
+
         let mut result = str_ref.to_vec();
         for (i, starts) in accumulated_starts.iter().enumerate() {
             for j in i..i + from_pat.len() {
@@ -472,39 +459,11 @@ impl ServerKey {
                 .scalar_mul_parallelized(&starts, from_pat_enc.len() as u64);
             Some((max_count.as_ref().map(|_| starts), starts_len))
         });
-        let accumulated_starts: Vec<_> =
-            self.accumulate_clear_pat_starts(pattern_starts, max_count.as_ref())
-                .flat_map(|x| {
-                    x.map(|(count, starts)| {
-                        let (basic_cond, extra_cond) = rayon::join(
-                            || {
-                                self.0
-                                    .scalar_eq_parallelized(&starts, from_pat_enc.len() as u64)
-                            },
-                            || match (count, max_count.as_ref()) {
-                                (Some(count), Some(Number::Clear(mc))) => {
-                                    Some(self.0.scalar_le_parallelized(&count, *mc as u64))
-                                }
-                                (Some(count), Some(Number::Encrypted(mc))) => {
-                                    let count_not_reached = self.0.le_parallelized(&count, mc);
-                                    let max_count_gt_zero =
-                                        self.0.scalar_gt_parallelized(mc, 0_u64);
-                                    Some(self.0.bitand_parallelized(
-                                        &count_not_reached,
-                                        &max_count_gt_zero,
-                                    ))
-                                }
-                                _ => None,
-                            },
-                        );
-                        if let Some(cond) = extra_cond {
-                            self.0.bitand_parallelized(&basic_cond, &cond)
-                        } else {
-                            basic_cond
-                        }
-                    })
-                })
-                .collect();
+        let accumulated_starts: Vec<_> = self.accumulate_clear_pat_stars_with_count(
+            max_count.as_ref(),
+            from_pat_enc.len(),
+            pattern_starts,
+        );
         let mut result = str_ref.to_vec();
         for (i, starts) in accumulated_starts.iter().enumerate() {
             for j in i..i + from_pat_enc.len() {
@@ -519,6 +478,49 @@ impl ServerKey {
             }
         }
         FheString::new_unchecked_unpadded(result)
+    }
+
+    /// A helper for accumulating the unpadded or clear pattern overlaps and counts,
+    /// and adjusts it based on the optional max count.
+    /// See [`accumulate_clear_pat_starts`] for this behavior.
+    fn accumulate_clear_pat_stars_with_count<
+        M: ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>>,
+    >(
+        &self,
+        max_count: Option<&Number>,
+        from_pat_len: usize,
+        pattern_starts: M,
+    ) -> Vec<FheUsize> {
+        self.accumulate_clear_pat_starts(pattern_starts, max_count)
+            .flat_map(|x| {
+                x.map(|(count, starts)| {
+                    let (basic_cond, extra_cond) = rayon::join(
+                        || self.0.scalar_eq_parallelized(&starts, from_pat_len as u64),
+                        || match (count, max_count) {
+                            (Some(count), Some(Number::Clear(mc))) => {
+                                Some(self.0.scalar_le_parallelized(&count, *mc as u64))
+                            }
+                            (Some(count), Some(Number::Encrypted(mc))) => {
+                                let count_not_reached = self.0.le_parallelized(&count, mc);
+                                let max_count_gt_zero = self.0.scalar_gt_parallelized(mc, 0_u64);
+                                Some(
+                                    self.0.bitand_parallelized(
+                                        &count_not_reached,
+                                        &max_count_gt_zero,
+                                    ),
+                                )
+                            }
+                            _ => None,
+                        },
+                    );
+                    if let Some(cond) = extra_cond {
+                        self.0.bitand_parallelized(&basic_cond, &cond)
+                    } else {
+                        basic_cond
+                    }
+                })
+            })
+            .collect()
     }
 
     /// A helper that encrypts a clear pattern.

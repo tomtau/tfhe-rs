@@ -1,4 +1,4 @@
-use crate::ciphertext::{FheAsciiChar, FheOption, FheUsize};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheUsize};
 use crate::server_key::ServerKey;
 use dashmap::DashMap;
 use rayon::prelude::*;
@@ -47,5 +47,21 @@ impl ServerKey {
                 },
             );
         (found.unwrap_or_else(|| self.false_ct()), index)
+    }
+
+    /// A helper that compares two encrypted unpadded strings for equality in windows.
+    /// It returns if the window is found in the first string, and the index of the window.
+    /// (find takes the leftmost result, rfind takes the rightmost result)
+    fn unpadded_window_equals<'a>(
+        &'a self,
+        snd: &'a [FheAsciiChar],
+        fst: &'a [FheAsciiChar],
+    ) -> impl ParallelIterator<Item = (FheBool, FheUsize)> + 'a {
+        fst.par_windows(snd.len()).enumerate().map(|(i, window)| {
+            (
+                self.par_eq(window, snd),
+                self.0.create_trivial_radix(i as u64, self.1),
+            )
+        })
     }
 }
