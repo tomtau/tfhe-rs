@@ -1,11 +1,11 @@
 use rayon::iter::{IntoParallelIterator, ParallelExtend, ParallelIterator};
-use tfhe::integer::RadixCiphertext;
+use tfhe::integer::{BooleanBlock, RadixCiphertext};
 
 use crate::client_key::ClientKey;
 
 /// An alias for a FHE ciphertext representing 0 or 1
 /// (to assist the refactoring to 0.5 which has a dedicated BooleanBlock type)
-pub type FheBool = RadixCiphertext;
+pub type FheBool = BooleanBlock;
 /// An alias for encrypted indices or other integer values
 pub type FheUsize = RadixCiphertext;
 /// An alias for encrypted options, i.e. a FHE bool and a FHE value
@@ -159,6 +159,7 @@ impl<'a> From<&'a FheString> for Pattern<'a> {
 }
 
 /// A wrapper for a number to be used in some string operations.
+/// TODO: conversions from other number types?
 pub enum Number {
     /// A plaintext number.
     Clear(usize),

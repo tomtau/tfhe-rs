@@ -3,7 +3,7 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number};
+use crate::ciphertext::{FheAsciiChar, FheString, FheUsize, Number};
 
 use super::ServerKey;
 
@@ -23,9 +23,8 @@ impl ServerKey {
     /// Basic usage:
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("abc").unwrap();
     /// assert_eq!(
@@ -49,7 +48,7 @@ impl ServerKey {
     #[must_use]
     pub fn repeat<N: Into<Number>>(&self, encrypted_str: &FheString, n: N) -> FheString {
         let str_ref = encrypted_str.as_ref();
-        let zero = self.false_ct();
+        let zero = self.zero_ct();
 
         match (encrypted_str, n.into()) {
             (_, Number::Clear(0)) => FheString::new_unchecked_unpadded(vec![]),
@@ -126,7 +125,7 @@ impl ServerKey {
                     .par_iter()
                     .map(|c| c.as_ref())
                     .collect::<Vec<_>>();
-                let zero = self.false_ct();
+                let zero = self.zero_ct();
                 let len = self.0.scalar_mul_parallelized(&rep_l, str_ref.len() as u64);
                 let mut result = str_ref
                     .repeat(MAX_REP_L)
@@ -137,7 +136,7 @@ impl ServerKey {
                         self.0.if_then_else_parallelized(&cond, *c, &zero).into()
                     })
                     .collect::<Vec<_>>();
-                result.push(self.false_ct().into());
+                result.push(self.zero_ct().into());
                 FheString::new_unchecked_padded(result)
             }
         }
@@ -148,7 +147,7 @@ impl ServerKey {
     fn duplicate_padded_str_char(
         &self,
         str_ref: &[FheAsciiChar],
-        zero: &FheBool,
+        zero: &FheUsize,
         n: Number,
         str_len: &FheUsize,
         i: usize,
@@ -170,8 +169,7 @@ impl ServerKey {
             .into_par_iter()
             .map(|j| {
                 let mut cond = self.0.scalar_eq_parallelized(&enc_i, j as u64);
-                self.0
-                    .bitand_assign_parallelized(&mut cond, &not_reached_end);
+                self.0.boolean_bitand_assign(&mut cond, &not_reached_end);
                 self.0
                     .if_then_else_parallelized(&cond, str_ref[j].as_ref(), zero)
             })
@@ -213,7 +211,7 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
@@ -224,9 +222,8 @@ mod test {
         1..=3
     )]
     fn test_repeat_padded(input: &str, n: usize, padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
         let encrypted_n = client_key.encrypt_usize(n);
 
         let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
@@ -246,9 +243,8 @@ mod test {
         0..=4
     )]
     fn test_repeat_unpadded(input: &str, n: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
         let encrypted_n = client_key.encrypt_usize(n);
 
         let encrypted_str = client_key.encrypt_str(input).unwrap();

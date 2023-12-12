@@ -15,9 +15,8 @@ impl ServerKey {
     /// # Examples
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s1 = client_key.encrypt_str("Ferris").unwrap();
     /// let s2 = client_key.encrypt_str("FERRIS").unwrap();
@@ -35,12 +34,12 @@ impl ServerKey {
                 let fst = encrypted_str.as_ref();
                 let snd = other_encrypted_str.as_ref();
                 match fst.len().cmp(&snd.len()) {
-                    Ordering::Less => self.0.bitand_parallelized(
+                    Ordering::Less => self.0.boolean_bitand(
                         &self.par_eq_ignore_ascii_case(fst, &snd[..fst.len()]),
                         &self.par_eq_zero(&snd[fst.len()..]),
                     ),
                     Ordering::Equal => self.par_eq_ignore_ascii_case(fst, snd),
-                    Ordering::Greater => self.0.bitand_parallelized(
+                    Ordering::Greater => self.0.boolean_bitand(
                         &self.par_eq_ignore_ascii_case(&fst[..snd.len()], snd),
                         &self.par_eq_zero(&fst[snd.len()..]),
                     ),
@@ -87,7 +86,7 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
@@ -98,9 +97,8 @@ mod test {
         1..=3
     )]
     fn test_eq_ignore_case_padded(input1: &str, input2: &str, padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str2 = client_key.encrypt_str(input2).unwrap();
         let encrypted_str = client_key.encrypt_str_padded(input1, padding_len).unwrap();
@@ -112,9 +110,8 @@ mod test {
 
     #[test_matrix("ferris", "FERRIS")]
     fn test_eq_ignore_case_unpadded(input1: &str, input2: &str) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str2 = client_key.encrypt_str(input2).unwrap();
         let encrypted_str = client_key.encrypt_str(input1).unwrap();

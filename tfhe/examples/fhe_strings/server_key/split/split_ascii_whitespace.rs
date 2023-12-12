@@ -19,9 +19,8 @@ impl ServerKey {
     /// Basic usage:
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("A few words").unwrap();
     /// assert_eq!(
@@ -33,9 +32,8 @@ impl ServerKey {
     /// All kinds of ASCII whitespace are considered:
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key
     ///     .encrypt_str(" Mary   had\ta little  \n\t lamb")
@@ -48,9 +46,8 @@ impl ServerKey {
     ///
     /// If the string is empty or all ASCII whitespace, the iterator yields no string slices:
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("").unwrap();
     /// assert_eq!(
@@ -69,7 +66,7 @@ impl ServerKey {
     pub fn split_ascii_whitespace(&self, encrypted_str: &FheString) -> FheSplitResult {
         let enc_str = self.pad_string(encrypted_str); // TODO: is it necessary?
         let str_ref = enc_str.as_ref();
-        let zero = self.false_ct();
+        let zero = self.zero_ct();
         let mut split_sequence = SplitFoundPattern::new();
         let whitespaces = str_ref.par_iter().map(|x| self.is_whitespace(x));
         split_sequence.par_extend(whitespaces.zip(str_ref.into_par_iter()).map(|(starts, c)| {
@@ -86,16 +83,15 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
 
     #[inline]
     fn split_ascii_whitespace_test(input: &str, padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         assert_eq!(

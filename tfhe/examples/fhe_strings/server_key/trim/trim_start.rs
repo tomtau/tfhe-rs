@@ -5,7 +5,7 @@ use rayon::iter::{
 use rayon::slice::ParallelSlice;
 use tfhe::integer::RadixCiphertext;
 
-use crate::ciphertext::{FheBool, FheString};
+use crate::ciphertext::{FheBool, FheString, FheUsize};
 use crate::scan::scan;
 use crate::server_key::ServerKey;
 
@@ -19,9 +19,8 @@ impl ServerKey {
     /// Basic usage:
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("\n Hello\tworld\t\n").unwrap();
     /// assert_eq!(
@@ -47,11 +46,9 @@ impl ServerKey {
             let (left_whitespace, right_whitespace) =
                 self.check_whitespace(&cache_is_whitespace, i, window);
             (
-                self.0.bitor_parallelized(
-                    &self.0.scalar_eq_parallelized(&left_whitespace, 0),
-                    &right_whitespace,
-                ),
-                left_whitespace,
+                self.0
+                    .boolean_bitor(&self.0.boolean_bitnot(&left_whitespace), &right_whitespace),
+                left_whitespace.into_radix::<FheUsize>(self.1, &self.0),
             )
         });
         let accumulated_ws_before_boundary: Vec<_> = scan(
@@ -59,11 +56,11 @@ impl ServerKey {
             |(ws_before_boundary_x, count_x), (ws_before_boundary_y, count_y)| {
                 let (boundary_not_hit, count_xy) = rayon::join(
                     || {
-                        self.0.bitand_parallelized(
+                        self.0.boolean_bitand(
                             &starts_with_ws,
                             &self
                                 .0
-                                .bitand_parallelized(ws_before_boundary_x, ws_before_boundary_y),
+                                .boolean_bitand(ws_before_boundary_x, ws_before_boundary_y),
                         )
                     },
                     || self.0.add_parallelized(count_x, count_y),
@@ -73,7 +70,12 @@ impl ServerKey {
                         .if_then_else_parallelized(&boundary_not_hit, &count_xy, count_x);
                 (boundary_not_hit, next_count)
             },
-            (starts_with_ws.clone(), starts_with_ws.clone()),
+            (
+                starts_with_ws.clone(),
+                starts_with_ws
+                    .clone()
+                    .into_radix::<FheUsize>(self.1, &self.0),
+            ),
         )
         .map(|(_, count)| count)
         .collect();
@@ -101,7 +103,7 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
@@ -111,9 +113,8 @@ mod test {
         1..=3
     )]
     fn test_trim_start(input: &str, padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let s = client_key.encrypt_str_padded(input, padding_len).unwrap();
         assert_eq!(

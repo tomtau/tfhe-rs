@@ -14,7 +14,7 @@ pub use split::{FhePatternLen, FheSplitResult};
 use dashmap::DashMap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use tfhe::integer::{RadixCiphertext, ServerKey as IntegerServerKey};
+use tfhe::integer::ServerKey as IntegerServerKey;
 
 use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number};
 use crate::client_key::{ClientKey, PRECISION_BITS};
@@ -29,17 +29,14 @@ impl From<&ClientKey> for ServerKey {
     fn from(key: &ClientKey) -> Self {
         let num_blocks =
             PRECISION_BITS / key.as_ref().parameters().message_modulus().0.ilog2() as usize;
-        Self(IntegerServerKey::new(key), num_blocks)
+        Self(IntegerServerKey::new_radix_server_key(key), num_blocks)
     }
 }
 
 impl From<IntegerServerKey> for ServerKey {
     fn from(key: IntegerServerKey) -> Self {
-        // FIXME: extract from `key` when the accessor is available.
-        // this is possible in the latest `main` of the `tfhe` crate repo.
-        // `fhe_strings-0.5-refactor` branch contains the WIP changes that uses it.
-        const NUM_BLOCKS: usize = 4;
-        Self(key, NUM_BLOCKS)
+        let num_blocks = PRECISION_BITS / key.message_modulus().0.ilog2() as usize;
+        Self(key, num_blocks)
     }
 }
 
@@ -61,12 +58,24 @@ impl ServerKey {
     /// Returns an encrypted `true` (1) constant.
     #[inline]
     fn true_ct(&self) -> FheBool {
-        self.0.create_trivial_radix(1, self.1)
+        self.0.create_trivial_boolean_block(true)
     }
 
     /// Returns an encrypted `false` (0) constant.
     #[inline]
     fn false_ct(&self) -> FheBool {
+        self.0.create_trivial_boolean_block(false)
+    }
+
+    /// Returns an encrypted 1 constant.
+    #[inline]
+    fn one_ct(&self) -> FheUsize {
+        self.0.create_trivial_radix(1, self.1)
+    }
+
+    /// Returns an encrypted 0 constant.
+    #[inline]
+    fn zero_ct(&self) -> FheUsize {
         self.0.create_trivial_zero_radix(self.1)
     }
 
@@ -80,7 +89,7 @@ impl ServerKey {
             },
             || self.0.scalar_le_parallelized(encrypted_char.as_ref(), end),
         );
-        self.0.bitand_parallelized(&ge_from, &le_to)
+        self.0.boolean_bitand(&ge_from, &le_to)
     }
 
     /// A helper for `cmux` operations where the condition may be missing (due to the neutral None
@@ -95,6 +104,32 @@ impl ServerKey {
         opt_b: &FheBool,
     ) -> FheBool {
         match cond {
+            // cmux (cond & a) | (!cond & b)
+            Some(cond) => {
+                let (not_cond, cond_and_a) = rayon::join(
+                    || self.0.boolean_bitnot(cond),
+                    || self.0.boolean_bitand(cond, opt_a),
+                );
+                let not_cond_and_b = self.0.boolean_bitand(&not_cond, opt_b);
+                self.0.boolean_bitor(&cond_and_a, &not_cond_and_b)
+            }
+            None if default_if_none => opt_a.clone(),
+            _ => opt_b.clone(),
+        }
+    }
+
+    /// A helper for `cmux` operations where the condition may be missing (due to the neutral None
+    /// value). If `cond` is `None`, `default_if_none` is used to determine the result (`opt_a`
+    /// if true).
+    #[inline]
+    fn if_then_else_usize(
+        &self,
+        cond: Option<&FheBool>,
+        default_if_none: bool,
+        opt_a: &FheUsize,
+        opt_b: &FheUsize,
+    ) -> FheUsize {
+        match cond {
             Some(cond) => self.0.if_then_else_parallelized(cond, opt_a, opt_b),
             None if default_if_none => opt_a.clone(),
             _ => opt_b.clone(),
@@ -105,7 +140,7 @@ impl ServerKey {
     #[inline]
     fn or(&self, a: Option<&FheBool>, b: Option<&FheBool>) -> Option<FheBool> {
         match (a, b) {
-            (Some(a), Some(b)) => Some(self.0.bitor_parallelized(a, b)),
+            (Some(a), Some(b)) => Some(self.0.boolean_bitor(a, b)),
             (Some(a), None) => Some(a.clone()),
             (None, Some(b)) => Some(b.clone()),
             (None, None) => None,
@@ -128,7 +163,7 @@ impl ServerKey {
     #[inline]
     fn and_true(&self, a: Option<&FheBool>, b: Option<&FheBool>) -> Option<FheBool> {
         match (a, b) {
-            (Some(a), Some(b)) => Some(self.0.bitand_parallelized(a, b)),
+            (Some(a), Some(b)) => Some(self.0.boolean_bitand(a, b)),
             (Some(a), None) => Some(a.clone()),
             (None, Some(b)) => Some(b.clone()),
             (None, None) => None,
@@ -159,16 +194,13 @@ impl ServerKey {
                         self.0
                             .scalar_eq_parallelized(&shifted_indices[j].1, i as u64)
                     },
-                    || self.0.scalar_eq_parallelized(&shifted_indices[j].0, 0),
+                    || self.0.boolean_bitnot(&shifted_indices[j].0),
                 );
-                let cond = self.0.bitand_parallelized(&part_cond, &not_in_pattern);
+                let cond = self.0.boolean_bitand(&part_cond, &not_in_pattern);
                 self.0
-                    .if_then_else_parallelized(&cond, fst[j].as_ref(), &self.false_ct())
+                    .if_then_else_parallelized(&cond, fst[j].as_ref(), &self.zero_ct())
             })
-            .reduce(
-                || self.false_ct(),
-                |a, b| self.0.bitxor_parallelized(&a, &b),
-            )
+            .reduce(|| self.zero_ct(), |a, b| self.0.bitxor_parallelized(&a, &b))
             .into()
     }
 
@@ -199,7 +231,7 @@ impl ServerKey {
                 .to_vec()
                 .into_par_iter()
                 .chain(rayon::iter::repeatn(
-                    self.false_ct().into(),
+                    self.zero_ct().into(),
                     pat.len() - enc_ref.len(),
                 ))
                 .zip(pat.as_ref().par_iter())
@@ -218,19 +250,12 @@ impl ServerKey {
 
     /// A helper that checks that two encrypted characters are a match
     /// or if the pattern has ended.
-    fn match_padded_pattern_char(
-        &self,
-        a: &FheAsciiChar,
-        b: &FheAsciiChar,
-    ) -> Option<RadixCiphertext> {
+    fn match_padded_pattern_char(&self, a: &FheAsciiChar, b: &FheAsciiChar) -> Option<FheBool> {
         let (pattern_ended, a_eq_b) = rayon::join(
             || self.0.scalar_eq_parallelized(b.as_ref(), 0),
             || self.0.eq_parallelized(a.as_ref(), b.as_ref()),
         );
-        Some(
-            self.0
-                .if_then_else_parallelized(&pattern_ended, &self.true_ct(), &a_eq_b),
-        )
+        Some(self.0.boolean_bitor(&pattern_ended, &a_eq_b))
     }
 
     /// A helper that checks that two encrypted strings are a match
@@ -361,7 +386,7 @@ impl ServerKey {
                             start_y = self.0.if_then_else_parallelized(
                                 &not_reached_max_count,
                                 &start_y,
-                                &self.false_ct(),
+                                &self.zero_ct(),
                             );
                         }
                         (Some(Number::Encrypted(count)), Some(c_xy)) => {
@@ -374,7 +399,7 @@ impl ServerKey {
                             start_y = self.0.if_then_else_parallelized(
                                 &not_reached_max_count,
                                 &start_y,
-                                &self.false_ct(),
+                                &self.zero_ct(),
                             );
                         }
                         _ => {}
@@ -410,7 +435,7 @@ impl ServerKey {
             FheString::Unpadded(_) => {
                 let str_ref = unpadded.as_ref();
                 let mut result = str_ref.to_vec();
-                result.push(self.false_ct().into());
+                result.push(self.zero_ct().into());
                 FheString::new_unchecked_padded(result)
             }
             FheString::Padded(_) => unpadded.clone(),

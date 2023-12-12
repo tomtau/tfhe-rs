@@ -29,9 +29,8 @@ impl ServerKey {
     /// Simple patterns:
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("Mary had a little lamb").unwrap();
     /// assert_eq!(
@@ -105,7 +104,7 @@ impl ServerKey {
                         let mut rev_str_ref = str_ref.to_vec();
                         rev_str_ref.reverse();
                         let pat_rev: String = pat.chars().rev().collect();
-                        let zero = self.false_ct();
+                        let zero = self.zero_ct();
                         let mut split_sequence = SplitFoundPattern::new();
                         let mut accumulated_starts = self
                             .clear_accumulated_starts(str_len, &rev_str_ref, &pat_rev, None)
@@ -148,25 +147,33 @@ impl ServerKey {
             FheString::Unpadded(_) => {
                 let str_ref = encrypted_str.as_ref();
                 let one = self.true_ct();
+                let zero_char: FheAsciiChar = self.zero_ct().into();
                 fn finalize_terminal(
                     terminator: bool,
                     one: &FheBool,
                     zero: &FheBool,
+                    zero_char: &FheAsciiChar,
                     split_sequence: &mut SplitFoundPattern,
                 ) {
                     if terminator {
-                        split_sequence.push_back((zero.clone(), zero.clone().into()));
-                        split_sequence.push_back((zero.clone(), zero.clone().into()));
+                        split_sequence.push_back((zero.clone(), zero_char.clone()));
+                        split_sequence.push_back((zero.clone(), zero_char.clone()));
 
-                        split_sequence.push_back((one.clone(), zero.clone().into()));
+                        split_sequence.push_back((one.clone(), zero_char.clone()));
                     }
                 }
                 let zero = self.false_ct();
                 match pat.into() {
                     Pattern::Clear(p) if p.is_empty() && str_ref.is_empty() => {
                         let mut split_sequence = VecDeque::new();
-                        split_sequence.push_back((one.clone(), zero.clone().into()));
-                        finalize_terminal(include_terminal, &one, &zero, &mut split_sequence);
+                        split_sequence.push_back((one.clone(), zero_char.clone()));
+                        finalize_terminal(
+                            include_terminal,
+                            &one,
+                            &zero,
+                            &zero_char,
+                            &mut split_sequence,
+                        );
                         (
                             (
                                 FhePatternLen::Plain(p.len()),
@@ -177,8 +184,14 @@ impl ServerKey {
                     }
                     Pattern::Encrypted(p) if p.as_ref().is_empty() && str_ref.is_empty() => {
                         let mut split_sequence = VecDeque::new();
-                        split_sequence.push_back((one.clone(), zero.clone().into()));
-                        finalize_terminal(include_terminal, &one, &zero, &mut split_sequence);
+                        split_sequence.push_back((one.clone(), zero_char.clone()));
+                        finalize_terminal(
+                            include_terminal,
+                            &one,
+                            &zero,
+                            &zero_char,
+                            &mut split_sequence,
+                        );
                         (
                             (
                                 FhePatternLen::Plain(p.as_ref().len()),
@@ -236,45 +249,55 @@ impl ServerKey {
         let pat = self.pad_string(pat); // TODO: unpadded pattern
         let mut rev_str_ref = str_ref.to_vec();
         rev_str_ref.reverse();
-        let zero = self.false_ct();
+        let zero = self.zero_ct();
         let (is_empty_pat, (orig_len, rev_pat)) = rayon::join(
             || self.is_empty(&pat),
             || rayon::join(|| self.len(&pat), || self.reverse_padded_pattern(&pat)),
         );
+        let is_empty_pat_radix = is_empty_pat.into_radix(self.1, &self.0);
         let mut split_sequence = SplitFoundPattern::new();
 
         let (empty_str_ref, empty_skip_len) = rayon::join(
             || self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64),
             || {
+                // TODO: try sum_ciphertexts_parallelized ?
                 let zero_count = str_ref
                     .par_iter()
-                    .map(|x| self.0.scalar_eq_parallelized(x.as_ref(), 0u64))
-                    .reduce(|| self.false_ct(), |x, y| self.0.add_parallelized(&x, &y));
-                self.0.mul_parallelized(&zero_count, &is_empty_pat)
+                    .map(|x| {
+                        self.0
+                            .scalar_eq_parallelized(x.as_ref(), 0u64)
+                            .into_radix(self.1, &self.0)
+                    })
+                    .reduce(|| self.zero_ct(), |x, y| self.0.add_parallelized(&x, &y));
+                self.0.mul_parallelized(&zero_count, &is_empty_pat_radix)
             },
         );
 
         let adjust_max_count =
-            self.adjust_rsplit_init_max_count(&max_count, &is_empty_pat, &empty_skip_len);
+            self.adjust_rsplit_init_max_count(&max_count, &is_empty_pat_radix, &empty_skip_len);
 
         let pat_ref = pat.as_ref();
         let (pat_len, is_not_empty) = rayon::join(
-            || self.0.max_parallelized(&orig_len, &is_empty_pat),
+            || self.0.max_parallelized(&orig_len, &is_empty_pat_radix),
             || self.0.scalar_ne_parallelized(pat_ref[0].as_ref(), 0),
         );
         let (rev_pattern_starts, zeroes) = rayon::join(
             || {
                 (0..str_len).into_par_iter().map(|i| {
                     let starts = self.starts_with_encrypted_par(&rev_str_ref[i..], &rev_pat);
-
-                    let starts_len = self.0.mul_parallelized(&starts, &pat_len);
-                    Some((max_count.as_ref().map(|_| starts), starts_len))
+                    let starts_radix = starts.into_radix(self.1, &self.0);
+                    let starts_len = self.0.mul_parallelized(&starts_radix, &pat_len);
+                    Some((max_count.as_ref().map(|_| starts_radix), starts_len))
                 })
             },
             || {
-                (0..str_len)
-                    .into_par_iter()
-                    .map(|i| Some(self.0.scalar_eq_parallelized(str_ref[i].as_ref(), 0)))
+                (0..str_len).into_par_iter().map(|i| {
+                    Some(
+                        self.0
+                            .scalar_eq_parallelized(str_ref[i].as_ref(), 0)
+                            .into_radix(self.1, &self.0),
+                    )
+                })
             },
         );
 
@@ -324,7 +347,7 @@ impl ServerKey {
                     .zip(accumulated_zeroes)
                     .map(|((starts, in_pattern), count_zero)| {
                         let not_ended = self.0.scalar_le_parallelized(&count_zero, 1);
-                        (self.0.bitand_parallelized(&starts, &not_ended), in_pattern)
+                        (self.0.boolean_bitand(&starts, &not_ended), in_pattern)
                     })
                     .collect(),
                 str_ref,
@@ -332,31 +355,30 @@ impl ServerKey {
             ),
         );
         if terminator {
+            let zerobool = self.false_ct();
             match max_count {
                 Some(Number::Clear(mc)) if mc >= 1 => {
-                    split_sequence.push_back((zero.clone(), zero.clone().into()));
-                    split_sequence.push_back((zero.clone(), zero.clone().into()));
+                    split_sequence.push_back((zerobool.clone(), zero.clone().into()));
+                    split_sequence.push_back((zerobool.clone(), zero.clone().into()));
 
                     split_sequence.push_back((empty_str_ref, zero.into()));
                 }
                 None => {
-                    split_sequence.push_back((zero.clone(), zero.clone().into()));
-                    split_sequence.push_back((zero.clone(), zero.clone().into()));
+                    split_sequence.push_back((zerobool.clone(), zero.clone().into()));
+                    split_sequence.push_back((zerobool.clone(), zero.clone().into()));
 
                     split_sequence.push_back((empty_str_ref, zero.into()));
                 }
                 Some(Number::Encrypted(mc)) => {
                     let gt_one = self.0.scalar_ge_parallelized(&mc, 1);
-                    split_sequence.push_back((zero.clone(), zero.clone().into()));
-                    split_sequence.push_back((zero.clone(), zero.clone().into()));
+                    split_sequence.push_back((zerobool.clone(), zero.clone().into()));
+                    split_sequence.push_back((zerobool.clone(), zero.clone().into()));
 
-                    split_sequence.push_back((
-                        self.0.bitand_parallelized(&empty_str_ref, &gt_one),
-                        zero.into(),
-                    ));
+                    split_sequence
+                        .push_back((self.0.boolean_bitand(&empty_str_ref, &gt_one), zero.into()));
                 }
                 _ => {}
-            }
+            };
         }
 
         (orig_len, split_sequence)
@@ -369,10 +391,10 @@ impl ServerKey {
     #[inline]
     fn finalized_accumulate_rsplit_starts(
         &self,
-        adjust_max_count: &Option<RadixCiphertext>,
-        is_not_empty: &RadixCiphertext,
-        count: Option<FheBool>,
-        starts: &FheBool,
+        adjust_max_count: &Option<FheUsize>,
+        is_not_empty: &FheBool,
+        count: Option<FheUsize>,
+        starts: &FheUsize,
     ) -> (FheBool, FheBool) {
         let count_not_reached = match (&adjust_max_count, count.as_ref()) {
             (Some(mc), Some(c)) => Some(self.0.lt_parallelized(c, mc)),
@@ -384,14 +406,14 @@ impl ServerKey {
         );
         if let Some(cnr) = count_not_reached {
             let (ps, inp) = rayon::join(
-                || self.0.bitand_parallelized(&pattern_starts, &cnr),
-                || self.0.bitand_parallelized(&in_pattern, is_not_empty),
+                || self.0.boolean_bitand(&pattern_starts, &cnr),
+                || self.0.boolean_bitand(&in_pattern, is_not_empty),
             );
-            (ps, self.0.bitand_parallelized(&inp, &cnr))
+            (ps, self.0.boolean_bitand(&inp, &cnr))
         } else {
             (
                 pattern_starts,
-                self.0.bitand_parallelized(&in_pattern, is_not_empty),
+                self.0.boolean_bitand(&in_pattern, is_not_empty),
             )
         }
     }
@@ -418,11 +440,9 @@ impl ServerKey {
             );
             count_xy = Some(min_next_count);
 
-            start_y = self.0.if_then_else_parallelized(
-                &not_reached_max_count,
-                &start_y,
-                &self.false_ct(),
-            );
+            start_y =
+                self.0
+                    .if_then_else_parallelized(&not_reached_max_count, &start_y, &self.zero_ct());
         }
         let next_count = if let (Some(count_x), Some(count_xy)) = (count_x, count_xy) {
             Some(
@@ -446,7 +466,7 @@ impl ServerKey {
     fn adjust_rsplit_init_max_count(
         &self,
         max_count: &Option<Number>,
-        is_empty_pat: &FheBool,
+        is_empty_pat_radix: &FheUsize,
         empty_skip_len: &FheUsize,
     ) -> Option<FheUsize> {
         match &max_count {
@@ -454,13 +474,13 @@ impl ServerKey {
                 let normal_count = self.0.create_trivial_radix(*mc as u64, self.1);
                 let mut final_count = self.0.add_parallelized(&normal_count, empty_skip_len);
                 self.0
-                    .sub_assign_parallelized(&mut final_count, is_empty_pat);
+                    .sub_assign_parallelized(&mut final_count, is_empty_pat_radix);
                 Some(final_count)
             }
             Some(Number::Encrypted(mc)) => {
                 let mut final_count = self.0.add_parallelized(mc, empty_skip_len);
                 self.0
-                    .sub_assign_parallelized(&mut final_count, is_empty_pat);
+                    .sub_assign_parallelized(&mut final_count, is_empty_pat_radix);
                 Some(final_count)
             }
             _ => None,
@@ -476,10 +496,16 @@ impl ServerKey {
         let mut rev_fst = fst.to_vec();
         rev_fst.reverse();
         let pat_len = fst.len();
-        let zero = self.false_ct();
+        let zero = self.zero_ct();
         let no_zeroes = rev_fst
             .par_iter()
-            .map(|x| Some(self.0.scalar_eq_parallelized(x.as_ref(), 0)))
+            .map(|x| {
+                Some(
+                    self.0
+                        .scalar_eq_parallelized(x.as_ref(), 0)
+                        .into_radix(self.1, &self.0),
+                )
+            })
             .reduce(|| None, |a, b| self.add(a.as_ref(), b.as_ref()))
             .unwrap_or_else(|| zero.clone());
         let shifted_indices: Vec<_> = (0..pat_len)
@@ -514,16 +540,15 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
 
     #[inline]
     fn rsplit_padded_test((input, split_pattern): (&str, &str), padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         let encrypted_split_pattern = client_key
@@ -576,9 +601,8 @@ mod test {
         ("", "")]
     )]
     fn test_rsplit_unpadded((input, split_pattern): (&str, &str)) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str = client_key.encrypt_str(input).unwrap();
         let encrypted_split_pattern = client_key.encrypt_str(split_pattern).unwrap();

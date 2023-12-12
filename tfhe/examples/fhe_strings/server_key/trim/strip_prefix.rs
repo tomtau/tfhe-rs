@@ -19,9 +19,8 @@ impl ServerKey {
     /// # Examples
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let foobar = client_key.encrypt_str("foo:bar").unwrap();
     /// assert_eq!(
@@ -83,7 +82,7 @@ impl ServerKey {
                         } else {
                             self.0.if_then_else_parallelized(
                                 &starts_with,
-                                &self.false_ct(),
+                                &self.zero_ct(),
                                 c.as_ref(),
                             )
                         }
@@ -138,7 +137,7 @@ impl ServerKey {
                         encrypted_str.clone(),
                     )
                 } else {
-                    let zero = self.false_ct();
+                    let zero = self.zero_ct();
                     let mut result = Vec::with_capacity(str_l);
                     result.par_extend(enc_ref.par_iter().enumerate().map(|(i, c)| {
                         if i + pat_l < str_l {
@@ -172,7 +171,7 @@ impl ServerKey {
                         encrypted_str.clone(),
                     )
                 } else {
-                    let zero = self.false_ct();
+                    let zero = self.zero_ct();
                     let mut result = Vec::with_capacity(str_l);
                     result.par_extend(enc_ref.par_iter().enumerate().map(|(i, c)| {
                         if i + pat_l < str_l {
@@ -204,7 +203,7 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
@@ -215,9 +214,8 @@ mod test {
         1..=3
     )]
     fn test_strip_prefix_padded(input: &str, pattern: &str, padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
         let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         assert_eq!(
             input.strip_prefix(pattern),
@@ -239,9 +237,8 @@ mod test {
         ["foo9", "bar", "foo"]
     )]
     fn test_strip_prefix_unpadded(input: &str, pattern: &str) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
         let encrypted_str = client_key.encrypt_str(input).unwrap();
         assert_eq!(
             input.strip_prefix(pattern),

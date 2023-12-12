@@ -16,9 +16,8 @@ impl ServerKey {
     /// # Examples
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let bananas = client_key.encrypt_str("bananas").unwrap();
     /// assert_eq!(
@@ -56,7 +55,7 @@ impl ServerKey {
                     return (self.true_ct(), self.len(encrypted_str));
                 }
                 if pat.len() > encrypted_str.as_ref().len() {
-                    return (self.false_ct(), self.false_ct());
+                    return (self.false_ct(), self.zero_ct());
                 }
                 let fst = encrypted_str.as_ref();
                 self.find_clear_pat_index(fst, pat, false)
@@ -84,7 +83,7 @@ impl ServerKey {
                         || (self.is_empty(pat), len.clone()),
                         |(x_starts, x_i), (y_starts, y_i)| {
                             rayon::join(
-                                || self.0.bitor_parallelized(&x_starts, &y_starts),
+                                || self.0.boolean_bitor(&x_starts, &y_starts),
                                 || self.0.if_then_else_parallelized(&y_starts, &y_i, &x_i),
                             )
                         },
@@ -95,7 +94,7 @@ impl ServerKey {
                     return (self.true_ct(), self.len(encrypted_str));
                 }
                 if pat.len() > encrypted_str.as_ref().len() {
-                    return (self.false_ct(), self.false_ct());
+                    return (self.false_ct(), self.zero_ct());
                 }
                 let fst = encrypted_str.as_ref();
                 self.find_clear_pat_index(fst, pat, false)
@@ -111,7 +110,7 @@ impl ServerKey {
                     || (self.false_ct(), len.clone()),
                     |(x_starts, x_i), (y_starts, y_i)| {
                         rayon::join(
-                            || self.0.bitor_parallelized(&x_starts, &y_starts),
+                            || self.0.boolean_bitor(&x_starts, &y_starts),
                             || self.0.if_then_else_parallelized(&y_starts, &y_i, &x_i),
                         )
                     },
@@ -130,7 +129,7 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
@@ -141,9 +140,8 @@ mod test {
         1..=3
     )]
     fn test_rfind_padded(input: &str, pattern: &str, padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
         let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         let encrypted_pattern = client_key.encrypt_str_padded(pattern, padding_len).unwrap();
         assert_eq!(
@@ -161,9 +159,8 @@ mod test {
         ["a", "z"]
     )]
     fn test_rfind_unpadded(input: &str, pattern: &str) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
         let encrypted_str = client_key.encrypt_str(input).unwrap();
         let encrypted_pattern = client_key.encrypt_str(pattern).unwrap();
         assert_eq!(

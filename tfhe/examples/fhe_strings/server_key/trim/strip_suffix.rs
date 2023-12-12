@@ -3,7 +3,7 @@ use rayon::iter::{
     ParallelIterator,
 };
 
-use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, Pattern};
+use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize, Pattern};
 use crate::scan::scan;
 use crate::server_key::ServerKey;
 
@@ -20,9 +20,8 @@ impl ServerKey {
     /// # Examples
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let barfoo = client_key.encrypt_str("bar:foo").unwrap();
     /// assert_eq!(
@@ -81,7 +80,7 @@ impl ServerKey {
 
                 let mut result = Vec::with_capacity(fst.len());
                 result.par_extend(fst.par_iter().zip(clear_mask).map(|(c, cond)| {
-                    self.if_then_else(cond.as_ref(), false, &self.false_ct(), c.as_ref())
+                    self.if_then_else_usize(cond.as_ref(), false, &self.zero_ct(), c.as_ref())
                         .into()
                 }));
                 result.push(fst.last().cloned().expect("last element"));
@@ -97,13 +96,13 @@ impl ServerKey {
                 }
                 let fst = encrypted_str.as_ref();
                 let empty_pattern = self.is_empty(pat);
-                let not_empty_pattern = self.0.bitnot_parallelized(&empty_pattern);
+                let not_empty_pattern = self.0.boolean_bitnot(&empty_pattern);
                 let suffix_found = (0..fst.len())
                     .into_par_iter()
                     .map(|i| self.par_eq(&fst[i..], snd));
                 let clear_mask: Vec<_> = scan(
                     suffix_found,
-                    |found_p, y| self.0.bitor_parallelized(found_p, y),
+                    |found_p, y| self.0.boolean_bitor(found_p, y),
                     empty_pattern,
                 )
                 .collect();
@@ -113,9 +112,9 @@ impl ServerKey {
                     .unwrap_or_else(|| self.false_ct());
                 let mut result = Vec::with_capacity(fst.len());
                 result.par_extend(fst.par_iter().zip(clear_mask).map(|(c, found)| {
-                    let cond = self.0.bitand_parallelized(&found, &not_empty_pattern);
+                    let cond = self.0.boolean_bitand(&found, &not_empty_pattern);
                     self.0
-                        .if_then_else_parallelized(&cond, &self.false_ct(), c.as_ref())
+                        .if_then_else_parallelized(&cond, &self.zero_ct(), c.as_ref())
                         .into()
                 }));
                 (found, FheString::new_unchecked_padded(result))
@@ -130,7 +129,7 @@ impl ServerKey {
                 }
                 let suffix_start = fst.len() - pat.len();
                 let suffix_found = self.starts_with_clear_par(&fst[suffix_start..], pat);
-                let zero = self.false_ct();
+                let zero = self.zero_ct();
                 let mut result = Vec::with_capacity(fst.len());
                 result.par_extend(
                     fst.par_iter().enumerate().map(|(i, c)| {
@@ -152,7 +151,7 @@ impl ServerKey {
                 let fst = encrypted_str.as_ref();
                 let suffix_start = fst.len() - snd.len();
                 let suffix_found = self.par_eq(&fst[suffix_start..], snd);
-                let zero = self.false_ct();
+                let zero = self.zero_ct();
                 let mut result = Vec::with_capacity(fst.len());
                 result.par_extend(
                     fst.par_iter().enumerate().map(|(i, c)| {
@@ -177,7 +176,7 @@ impl ServerKey {
         &self,
         suffix_start: usize,
         suffix_found: &FheBool,
-        zero: &FheBool,
+        zero: &FheUsize,
         i: usize,
         c: &FheAsciiChar,
     ) -> FheAsciiChar {
@@ -194,7 +193,7 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
@@ -205,9 +204,8 @@ mod test {
         1..=3
     )]
     fn test_strip_suffix_padded(input: &str, pattern: &str, padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
         let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         assert_eq!(
             input.strip_suffix(pattern),
@@ -229,9 +227,8 @@ mod test {
         ["foo9", "bar", "ana"]
     )]
     fn test_strip_suffix_unpadded(input: &str, pattern: &str) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
         let encrypted_str = client_key.encrypt_str(input).unwrap();
         assert_eq!(
             input.strip_suffix(pattern),

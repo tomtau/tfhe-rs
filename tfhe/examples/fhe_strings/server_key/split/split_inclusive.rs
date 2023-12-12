@@ -19,9 +19,8 @@ impl ServerKey {
     /// # Examples
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("Mary had a little lamb\nlittle lamb\nlittle lamb.").unwrap();
     /// assert_eq!(
@@ -35,9 +34,8 @@ impl ServerKey {
     /// That substring will be the last item returned by the iterator.
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key
     ///     .encrypt_str("Mary had a little lamb\nlittle lamb\nlittle lamb.\n")
@@ -90,14 +88,16 @@ impl ServerKey {
             Pattern::Encrypted(p) => {
                 let pat = self.pad_string(p); // TODO: unpadded version
                 let is_empty = self.is_empty(&pat);
+                let is_empty_radix = is_empty.into_radix(self.1, &self.0);
                 let mut split_sequence = SplitFoundPattern::new();
                 let pat_ref = pat.as_ref();
                 let orig_len = self.len(&pat);
-                let pat_len = self.0.max_parallelized(&orig_len, &is_empty);
+                let pat_len = self.0.max_parallelized(&orig_len, &is_empty_radix);
                 let pattern_starts = (0..str_len).into_par_iter().map(|i| {
                     let starts = self.starts_with_encrypted_par(&str_ref[i..], pat_ref);
+                    let starts_radix = starts.into_radix(self.1, &self.0);
                     let not_ended = self.0.scalar_ne_parallelized(str_ref[i].as_ref(), 0);
-                    Some((self.0.mul_parallelized(&starts, &pat_len), not_ended))
+                    Some((self.0.mul_parallelized(&starts_radix, &pat_len), not_ended))
                 });
 
                 let accumulated_starts: Vec<_> = scan(
@@ -108,7 +108,7 @@ impl ServerKey {
                             let next_start_y = self.0.if_then_else_parallelized(
                                 not_ended_y,
                                 start_y,
-                                &self.false_ct(),
+                                &self.zero_ct(),
                             );
                             let next_start = self.0.if_then_else_parallelized(
                                 &in_pattern,
@@ -138,7 +138,7 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
@@ -163,9 +163,8 @@ mod test {
         1..=3
     )]
     fn test_split_inclusive((input, split_pattern): (&str, &str), padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         let encrypted_split_pattern = client_key

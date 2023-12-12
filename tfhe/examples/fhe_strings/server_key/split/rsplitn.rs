@@ -31,9 +31,8 @@ impl ServerKey {
     /// Simple patterns:
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("Mary had a little lambda").unwrap();
     /// assert_eq!(
@@ -99,7 +98,7 @@ impl ServerKey {
                 ),
                 (Pattern::Clear(p), n) if p.is_empty() => {
                     // TODO: more efficient way
-                    let empty_pat = FheString::new_unchecked_padded(vec![self.false_ct().into()]);
+                    let empty_pat = FheString::new_unchecked_padded(vec![self.zero_ct().into()]);
                     self.rsplitn_inner(encrypted_str, n, Pattern::Encrypted(&empty_pat))
                 }
                 (Pattern::Clear(pat), max_count) => {
@@ -110,7 +109,7 @@ impl ServerKey {
                     let mut rev_str_ref = str_ref.to_vec();
                     rev_str_ref.reverse();
                     let pat_rev: String = pat.chars().rev().collect();
-                    let zero = self.false_ct();
+                    let zero = self.zero_ct();
                     let mut split_sequence = SplitFoundPattern::new();
 
                     let mut accumulated_starts = self
@@ -182,8 +181,8 @@ impl ServerKey {
     ) -> (FheBool, FheBool) {
         if let Some(mc) = le_maxcount {
             rayon::join(
-                || self.0.bitand_parallelized(&starts, &mc),
-                || self.0.bitand_parallelized(&in_pattern, &mc),
+                || self.0.boolean_bitand(&starts, &mc),
+                || self.0.boolean_bitand(&in_pattern, &mc),
             )
         } else {
             (starts, in_pattern)
@@ -213,16 +212,15 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
 
     #[inline]
     fn rsplitn_test((input, n, split_pattern): (&str, usize, &str), padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         let encrypted_split_pattern = client_key

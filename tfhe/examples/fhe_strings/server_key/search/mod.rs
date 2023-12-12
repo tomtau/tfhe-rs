@@ -38,9 +38,9 @@ impl ServerKey {
                         || self.or(x_starts.as_ref(), y_starts.as_ref()),
                         || {
                             if left_match {
-                                self.if_then_else(x_starts.as_ref(), false, &x_i, &y_i)
+                                self.if_then_else_usize(x_starts.as_ref(), false, &x_i, &y_i)
                             } else {
-                                self.if_then_else(y_starts.as_ref(), false, &y_i, &x_i)
+                                self.if_then_else_usize(y_starts.as_ref(), false, &y_i, &x_i)
                             }
                         },
                     )

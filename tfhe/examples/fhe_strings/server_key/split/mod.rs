@@ -10,7 +10,6 @@ mod splitn;
 use std::collections::VecDeque;
 
 use rayon::prelude::*;
-use tfhe::integer::RadixCiphertext;
 
 use crate::ciphertext::{FheAsciiChar, FheBool, FheString, FheUsize, Number, Pattern};
 use crate::scan::scan;
@@ -171,9 +170,8 @@ impl ServerKey {
     /// Simple patterns:
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("Mary had a lamb").unwrap();
     /// assert_eq!(
@@ -203,9 +201,8 @@ impl ServerKey {
     /// with empty strings in the output:
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("||||a||b|c").unwrap();
     /// assert_eq!(
@@ -217,9 +214,8 @@ impl ServerKey {
     /// Contiguous separators are separated by the empty string.
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("(///)").unwrap();
     /// assert_eq!(
@@ -232,9 +228,8 @@ impl ServerKey {
     /// by empty strings.
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("010").unwrap();
     /// assert_eq!(
@@ -248,9 +243,8 @@ impl ServerKey {
     /// and end of the string.
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("rust").unwrap();
     /// assert_eq!(
@@ -263,9 +257,8 @@ impl ServerKey {
     /// when whitespace is used as the separator. This code is correct:
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s = client_key.encrypt_str("    a  b c").unwrap();
     /// assert_eq!(
@@ -309,8 +302,8 @@ impl ServerKey {
         terminator: bool,
         max_count: Option<usize>,
     ) -> SplitFoundPattern {
-        let zero = self.false_ct();
-        let one = self.true_ct();
+        let boolzero = self.false_ct();
+        let zero = self.zero_ct();
         let mut split_sequence = SplitFoundPattern::new();
 
         let mut count = 1;
@@ -322,12 +315,13 @@ impl ServerKey {
                     zero.clone().into(),
                 ));
 
-                split_sequence.par_extend(str_ref.par_iter().map(|x| (zero.clone(), x.clone())));
+                split_sequence
+                    .par_extend(str_ref.par_iter().map(|x| (boolzero.clone(), x.clone())));
                 return split_sequence;
             }
             Some(c) => {
                 let len = std::cmp::min(str_ref.len(), c - 1);
-                split_sequence.push_back((one.clone(), str_ref[0].clone()));
+                split_sequence.push_back((self.true_ct(), str_ref[0].clone()));
                 split_sequence.par_extend(
                     str_ref[1..len]
                         .par_iter()
@@ -335,13 +329,15 @@ impl ServerKey {
                 );
                 count += len;
                 if len < str_ref.len() {
-                    split_sequence
-                        .par_extend(str_ref[len..].par_iter().map(|x| (zero.clone(), x.clone())));
+                    split_sequence.par_extend(
+                        str_ref[len..]
+                            .par_iter()
+                            .map(|x| (boolzero.clone(), x.clone())),
+                    );
                 }
             }
             _ => {
-                split_sequence.push_back((one.clone(), str_ref[0].clone()));
-
+                split_sequence.push_back((self.true_ct(), str_ref[0].clone()));
                 split_sequence.par_extend(
                     str_ref[1..]
                         .par_iter()
@@ -350,11 +346,11 @@ impl ServerKey {
             }
         }
         if terminator && (max_count.is_none() || matches!(max_count, Some(c) if c < count)) {
-            split_sequence.push_back((zero.clone(), zero.clone().into()));
+            split_sequence.push_back((boolzero.clone(), zero.clone().into()));
 
-            split_sequence.push_back((one, zero.into()));
+            split_sequence.push_back((self.true_ct(), zero.into()));
         } else if terminator {
-            split_sequence.push_back((zero.clone(), zero.clone().into()));
+            split_sequence.push_back((boolzero.clone(), zero.clone().into()));
 
             split_sequence.push_back((
                 self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64),
@@ -389,8 +385,11 @@ impl ServerKey {
     ) -> impl ParallelIterator<Item = Option<(Option<FheUsize>, FheUsize)>> + 'a {
         let pattern_starts = (0..str_len).into_par_iter().map(move |i| {
             let starts = self.starts_with_clear_par(&str_ref[i..], pat);
-            let starts_len = self.0.scalar_mul_parallelized(&starts, pat.len() as u64);
-            Some((max_count.map(|_| starts), starts_len))
+            let starts_radix = starts.into_radix(self.1, &self.0);
+            let starts_len = self
+                .0
+                .scalar_mul_parallelized(&starts_radix, pat.len() as u64);
+            Some((max_count.map(|_| starts_radix), starts_len))
         });
         self.accumulate_clear_pat_starts(pattern_starts, max_count)
     }
@@ -407,19 +406,19 @@ impl ServerKey {
     ) -> (FheUsize, SplitFoundPattern) {
         let pat = self.pad_string(pat); // TODO: unpadded pattern
 
-        let zero = self.false_ct();
+        let zero = self.zero_ct();
         let (is_empty_pat, orig_len) = rayon::join(|| self.is_empty(&pat), || self.len(&pat));
-
+        let is_empty_pat_radix = is_empty_pat.clone().into_radix(self.1, &self.0);
         let mut split_sequence = SplitFoundPattern::new();
 
         let pat_ref = pat.as_ref();
         let first_start = self.starts_with_encrypted_par(str_ref, pat_ref);
         let (pat_len, is_not_empty_pat) = rayon::join(
-            || self.0.max_parallelized(&orig_len, &is_empty_pat),
+            || self.0.max_parallelized(&orig_len, &is_empty_pat_radix),
             || self.0.scalar_ne_parallelized(pat_ref[0].as_ref(), 0),
         );
         let pattern_starts = (0..str_len).into_par_iter().map(|i| {
-            let (starts, not_ended) = rayon::join(
+            let (starts, ended) = rayon::join(
                 || {
                     if i == 0 {
                         first_start.clone()
@@ -427,22 +426,26 @@ impl ServerKey {
                         self.starts_with_encrypted_par(&str_ref[i..], pat_ref)
                     }
                 },
-                || self.0.scalar_ne_parallelized(str_ref[i].as_ref(), 0),
+                || {
+                    self.0
+                        .scalar_eq_parallelized(str_ref[i].as_ref(), 0)
+                        .into_radix(self.1, &self.0)
+                },
             );
-            let starts_len = self.0.mul_parallelized(&starts, &pat_len);
-            Some((max_count.as_ref().map(|_| starts), starts_len, not_ended))
+            let starts_radix = starts.into_radix(self.1, &self.0);
+            let starts_len = self.0.mul_parallelized(&starts_radix, &pat_len);
+            Some((max_count.as_ref().map(|_| starts_radix), starts_len, ended))
         });
 
         let accumulated_starts = scan(
             pattern_starts,
             |x, y| match (x, y) {
-                (Some((count_x, start_x, not_ended_x)), Some((count_y, start_y, not_ended_y))) => {
-                    self.encrypted_pat_split_start_padded(
+                (Some((count_x, start_x, ended_x)), Some((count_y, start_y, ended_y))) => self
+                    .encrypted_pat_split_start_padded(
                         &max_count,
-                        (count_x, start_x, not_ended_x),
-                        (count_y, start_y, not_ended_y),
-                    )
-                }
+                        (count_x, start_x, ended_x),
+                        (count_y, start_y, ended_y),
+                    ),
                 (None, y) => y.clone(),
                 (x, None) => x.clone(),
             },
@@ -463,7 +466,7 @@ impl ServerKey {
         .collect();
         split_sequence.par_extend(self.split_compute(accumulated_starts, str_ref, &zero));
         if terminator {
-            split_sequence.push_back((is_empty_pat, self.false_ct().into()));
+            split_sequence.push_back((is_empty_pat, self.zero_ct().into()));
         }
         (orig_len, split_sequence)
     }
@@ -479,7 +482,7 @@ impl ServerKey {
         max_count: &Option<Number>,
         count: Option<FheUsize>,
         starts: &FheUsize,
-        ended: &FheBool,
+        ended: &FheUsize,
     ) -> (FheBool, FheBool) {
         let count_not_reached = match (&max_count, count.as_ref()) {
             (Some(Number::Encrypted(mc)), Some(c)) => Some(self.0.lt_parallelized(c, mc)),
@@ -495,7 +498,7 @@ impl ServerKey {
                     || {
                         let pattern_starts = self.0.eq_parallelized(starts, pat_len);
                         if let Some(ref cnr) = count_not_reached {
-                            self.0.bitand_parallelized(cnr, &pattern_starts)
+                            self.0.boolean_bitand(cnr, &pattern_starts)
                         } else {
                             pattern_starts
                         }
@@ -506,15 +509,15 @@ impl ServerKey {
             || {
                 let in_pattern = self.0.scalar_gt_parallelized(starts, 0u64);
                 if let Some(ref cnr) = count_not_reached {
-                    self.0.bitand_parallelized(cnr, &in_pattern)
+                    self.0.boolean_bitand(cnr, &in_pattern)
                 } else {
                     in_pattern
                 }
             },
         );
         (
-            self.0.bitand_parallelized(&pattern_starts, &not_ended),
-            self.0.bitand_parallelized(&in_pattern, is_not_empty_pat),
+            self.0.boolean_bitand(&pattern_starts, &not_ended),
+            self.0.boolean_bitand(&in_pattern, is_not_empty_pat),
         )
     }
 
@@ -527,11 +530,13 @@ impl ServerKey {
     fn encrypted_pat_split_start_padded(
         &self,
         max_count: &Option<Number>,
-        (count_x, start_x, not_ended_x): (&Option<FheUsize>, &FheUsize, &FheBool),
-        (count_y, start_y, not_ended_y): (&Option<FheUsize>, &FheUsize, &FheBool),
+        (count_x, start_x, ended_x): (&Option<FheUsize>, &FheUsize, &FheUsize),
+        (count_y, start_y, ended_y): (&Option<FheUsize>, &FheUsize, &FheUsize),
     ) -> Option<(Option<FheUsize>, FheUsize, FheUsize)> {
         let count_xy = self.add(count_x.as_ref(), count_y.as_ref());
-        let not_ended = self.0.bitor_parallelized(not_ended_x, not_ended_y);
+        let ended = self.0.add_parallelized(ended_x, ended_y);
+        let not_ended_y = self.0.scalar_eq_parallelized(ended_y, 0u64);
+        let not_ended = self.0.scalar_le_parallelized(&ended, 1u64);
         let count_correct =
             if let (Some(count_xy), Some(count_x)) = (count_xy.as_ref(), count_x.as_ref()) {
                 Some(
@@ -544,7 +549,7 @@ impl ServerKey {
         let in_pattern = self.0.scalar_gt_parallelized(start_x, 1);
         let next_pattern = self.0.scalar_gt_parallelized(start_y, 0);
 
-        let mut start_y_not_ended = self.0.bitand_parallelized(&next_pattern, not_ended_y);
+        let mut start_y_not_ended = self.0.boolean_bitand(&next_pattern, &not_ended_y);
         let next_count = if let (Some(adjusted_max_count), Some(count_x), Some(count_correct)) =
             (max_count, count_x, count_correct)
         {
@@ -562,7 +567,7 @@ impl ServerKey {
                 ),
             };
             self.0
-                .bitand_assign_parallelized(&mut start_y_not_ended, &not_reached_max_count);
+                .boolean_bitand_assign(&mut start_y_not_ended, &not_reached_max_count);
             Some(min_next_count)
         } else {
             None
@@ -570,13 +575,13 @@ impl ServerKey {
 
         let next_start_y =
             self.0
-                .if_then_else_parallelized(&start_y_not_ended, start_y, &self.false_ct());
+                .if_then_else_parallelized(&start_y_not_ended, start_y, &self.zero_ct());
         let next_start = self.0.if_then_else_parallelized(
             &in_pattern,
             &self.0.scalar_sub_parallelized(start_x, 1),
             &next_start_y,
         );
-        Some((next_count, next_start, not_ended_y.clone()))
+        Some((next_count, next_start, ended))
     }
 
     /// A helper that processes the accumulated starts for computing the non-inclusive split
@@ -585,7 +590,7 @@ impl ServerKey {
         &'a self,
         accumulated_starts: Vec<(FheBool, FheBool)>,
         str_ref: &'a [FheAsciiChar],
-        zero: &'a RadixCiphertext,
+        zero: &'a FheUsize,
     ) -> impl ParallelIterator<Item = (FheBool, FheAsciiChar)> + 'a {
         accumulated_starts
             .into_par_iter()
@@ -629,7 +634,7 @@ impl ServerKey {
                         self.larger_clear_pattern_split(str_ref),
                     ),
                     Pattern::Clear(pat) => {
-                        let zero = self.false_ct();
+                        let zero = self.zero_ct();
                         let mut split_sequence = VecDeque::new();
                         let mut accumulated_starts = self
                             .clear_accumulated_starts(str_len, str_ref, pat, None)
@@ -646,7 +651,7 @@ impl ServerKey {
                             self.0.scalar_eq_parallelized(str_ref[0].as_ref(), 0u64);
                         accumulated_starts[0] = (
                             self.0
-                                .bitor_parallelized(&accumulated_starts[0].0, &empty_str_ref),
+                                .boolean_bitor(&accumulated_starts[0].0, &empty_str_ref),
                             accumulated_starts[0].1.clone(),
                         );
                         split_sequence.par_extend(self.split_compute(
@@ -679,7 +684,7 @@ impl ServerKey {
                 let str_ref = encrypted_str.as_ref();
                 let one = self.true_ct();
 
-                let zero = self.false_ct();
+                let zero = self.zero_ct();
                 match pat.into() {
                     Pattern::Clear(p) if str_ref.is_empty() && p.is_empty() => {
                         let mut split_sequence = VecDeque::new();
@@ -748,16 +753,15 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
 
     #[inline]
     fn split_padded_test((input, split_pattern): (&str, &str), padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str = client_key.encrypt_str_padded(input, padding_len).unwrap();
         let encrypted_split_pattern = client_key
@@ -810,9 +814,8 @@ mod test {
         ("", "")]
     )]
     fn test_split_unpadded((input, split_pattern): (&str, &str)) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let encrypted_str = client_key.encrypt_str(input).unwrap();
         let encrypted_split_pattern = client_key.encrypt_str(split_pattern).unwrap();

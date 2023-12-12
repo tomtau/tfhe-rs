@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tfhe::integer::{gen_keys, ClientKey as IntegerClientKey};
+use tfhe::integer::ClientKey as IntegerClientKey;
 use tfhe::shortint::ShortintParameterSet;
 
 use crate::ciphertext::{FheAsciiChar, FheBool, FheOption, FheString, FheUsize};
@@ -19,7 +19,7 @@ impl ClientKey {
         P: TryInto<ShortintParameterSet>,
         <P as TryInto<ShortintParameterSet>>::Error: std::fmt::Debug,
     {
-        let key = gen_keys(params).0;
+        let key = IntegerClientKey::new(params);
         let num_blocks = PRECISION_BITS / key.parameters().message_modulus().0.ilog2() as usize;
         Self(key, num_blocks)
     }
@@ -36,12 +36,12 @@ impl ClientKey {
 
     /// Decrypts a single boolean (encrypted 0 or 1)
     pub fn decrypt_bool(&self, byte: &FheBool) -> bool {
-        self.0.decrypt_radix::<u64>(byte) != 0
+        self.0.decrypt_bool(byte)
     }
 
     /// Decrypts a single number
     pub fn decrypt_usize(&self, size: &FheUsize) -> usize {
-        self.0.decrypt_radix::<u64>(size) as usize // FIXME: 32-bit archs?
+        self.0.decrypt_radix::<u64>(size) as usize // TODO: 32-bit archs?
     }
 
     /// Decrypts an encrypted option with an encrypted usize payload
@@ -138,6 +138,10 @@ impl ClientKey {
 
                 result.push(current.clone());
                 current = "".to_string();
+                last_found |= found_dec
+                    && (Some(1) == end_len_match
+                        && !is_right_match_empty
+                        && matches!(include_empty, Some(0)));
             } else if found_dec && i != 0 {
                 add_pattern(char);
 

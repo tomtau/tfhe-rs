@@ -22,9 +22,8 @@ impl ServerKey {
     /// # Examples
     ///
     /// ```
-    /// let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-    /// let client_key = client_key::ClientKey::from(ck);
-    /// let server_key = server_key::ServerKey::from(sk);
+    /// let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+    /// let server_key = server_key::ServerKey::from(&client_key);
     ///
     /// let s1 = client_key.encrypt_str("A").unwrap();
     /// let s2 = client_key.encrypt_str("B").unwrap();
@@ -95,7 +94,7 @@ impl ServerKey {
 #[cfg(test)]
 mod test {
     use test_case::test_matrix;
-    use tfhe::integer::gen_keys;
+
     use tfhe::shortint::prelude::PARAM_MESSAGE_2_CARRY_2_KS_PBS;
 
     use crate::{client_key, server_key};
@@ -106,9 +105,8 @@ mod test {
         1..=3
     )]
     fn test_le_padded(input_a: &str, input_b: &str, padding_len: usize) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let s1 = client_key.encrypt_str_padded(input_a, padding_len).unwrap();
         let s2 = client_key.encrypt_str_padded(input_b, padding_len).unwrap();
@@ -131,9 +129,8 @@ mod test {
         ["B", "ana", "apples", "ban", "bbn"]
     )]
     fn test_le_unpadded(input_a: &str, input_b: &str) {
-        let (ck, sk) = gen_keys(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
-        let client_key = client_key::ClientKey::from(ck);
-        let server_key = server_key::ServerKey::from(sk);
+        let client_key = client_key::ClientKey::new(PARAM_MESSAGE_2_CARRY_2_KS_PBS);
+        let server_key = server_key::ServerKey::from(&client_key);
 
         let s1 = client_key.encrypt_str(input_a).unwrap();
         let s2 = client_key.encrypt_str(input_b).unwrap();
