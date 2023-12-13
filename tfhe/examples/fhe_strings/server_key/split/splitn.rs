@@ -91,14 +91,15 @@ impl ServerKey {
                     self.larger_clear_pattern_split(str_ref),
                 )
             }
-            (Pattern::Clear(p), Number::Clear(count)) if p.is_empty() => FheSplitResult::SplitN(
-                None,
-                (
-                    FhePatternLen::Plain(0),
-                    FhePatternLen::Encrypted(str_real_len),
-                ),
-                self.empty_clear_pattern_split(str_ref, true, Some(count)),
-            ),
+            (Pattern::Clear(p), Number::Clear(count)) if p.is_empty() => {
+                // TODO: more efficient way
+                let empty_pat = FheString::new_unchecked_padded(vec![self.zero_ct().into()]);
+                self.splitn(
+                    encrypted_str,
+                    Number::Clear(count),
+                    Pattern::Encrypted(&empty_pat),
+                )
+            }
 
             (Pattern::Clear(pat), max_count) => {
                 let zero = self.zero_ct();

@@ -86,13 +86,16 @@ impl ServerKey {
                 let str_ref = encrypted_str.as_ref();
                 let str_len = str_ref.len();
                 match pat.into() {
-                    Pattern::Clear(p) if p.is_empty() => (
-                        (
-                            FhePatternLen::Plain(0),
-                            FhePatternLen::Encrypted(str_real_len),
-                        ),
-                        self.empty_clear_pattern_split(str_ref, include_terminal, None),
-                    ),
+                    Pattern::Clear(p) if p.is_empty() => {
+                        // TODO: more efficient way
+                        let empty_pat =
+                            FheString::new_unchecked_padded(vec![self.zero_ct().into()]);
+                        self.rsplit_inner(
+                            encrypted_str,
+                            Pattern::Encrypted(&empty_pat),
+                            include_terminal,
+                        )
+                    }
                     Pattern::Clear(p) if p.len() > str_ref.len() => (
                         (
                             FhePatternLen::Plain(p.len()),

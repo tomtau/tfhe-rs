@@ -62,10 +62,15 @@ impl ServerKey {
         let str_ref = enc_str.as_ref();
         let str_len = str_ref.len();
         match pat.into() {
-            Pattern::Clear(p) if p.is_empty() => FheSplitResult::SplitInclusive(
-                FhePatternLen::Plain(0),
-                self.empty_clear_pattern_split(str_ref, false, None),
-            ),
+            Pattern::Clear(p) if p.is_empty() => {
+                {
+                    // TODO: more efficient way
+                    let empty_pat = FheString::new_unchecked_padded(vec![self.zero_ct().into()]);
+                    let (_, split_found) =
+                        self.split_inner(encrypted_str, Pattern::Encrypted(&empty_pat), false);
+                    FheSplitResult::SplitInclusive(FhePatternLen::Plain(0), split_found)
+                }
+            }
             Pattern::Clear(p) if p.len() > str_ref.len() => FheSplitResult::SplitInclusive(
                 FhePatternLen::Plain(p.len()),
                 self.larger_clear_pattern_split(str_ref),
